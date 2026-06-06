@@ -23,8 +23,10 @@ data class MonitorConfig(
     val senderEmail: String = "",
     val senderPassword: String = "",
     val recipientEmail: String = "",
-    val locationIntervalMinutes: Int = 15,
-    val isMonitoringEnabled: Boolean = false
+    val locationIntervalMinutes: Int = 5,
+    val emailIntervalMinutes: Int = 60,
+    val isMonitoringEnabled: Boolean = false,
+    val useHighAccuracy: Boolean = false
 )
 
 class AppConfig(private val context: Context) {
@@ -35,7 +37,9 @@ class AppConfig(private val context: Context) {
         val SENDER_EMAIL = stringPreferencesKey("sender_email")
         val RECIPIENT_EMAIL = stringPreferencesKey("recipient_email")
         val LOCATION_INTERVAL = intPreferencesKey("location_interval_minutes")
+        val EMAIL_INTERVAL = intPreferencesKey("email_interval_minutes")
         val IS_MONITORING_ENABLED = booleanPreferencesKey("is_monitoring_enabled")
+        val USE_HIGH_ACCURACY = booleanPreferencesKey("use_high_accuracy")
     }
 
     private val encryptedPrefs: SharedPreferences by lazy {
@@ -56,8 +60,10 @@ class AppConfig(private val context: Context) {
             senderEmail = prefs[Keys.SENDER_EMAIL] ?: "",
             senderPassword = encryptedPrefs.getString("sender_password", "") ?: "",
             recipientEmail = prefs[Keys.RECIPIENT_EMAIL] ?: "",
-            locationIntervalMinutes = prefs[Keys.LOCATION_INTERVAL] ?: 15,
-            isMonitoringEnabled = prefs[Keys.IS_MONITORING_ENABLED] ?: false
+            locationIntervalMinutes = prefs[Keys.LOCATION_INTERVAL] ?: 5,
+            emailIntervalMinutes = prefs[Keys.EMAIL_INTERVAL] ?: 60,
+            isMonitoringEnabled = prefs[Keys.IS_MONITORING_ENABLED] ?: false,
+            useHighAccuracy = prefs[Keys.USE_HIGH_ACCURACY] ?: false
         )
     }
 
@@ -76,7 +82,9 @@ class AppConfig(private val context: Context) {
             prefs[Keys.SENDER_EMAIL] = config.senderEmail
             prefs[Keys.RECIPIENT_EMAIL] = config.recipientEmail
             prefs[Keys.LOCATION_INTERVAL] = config.locationIntervalMinutes
+            prefs[Keys.EMAIL_INTERVAL] = config.emailIntervalMinutes
             prefs[Keys.IS_MONITORING_ENABLED] = config.isMonitoringEnabled
+            prefs[Keys.USE_HIGH_ACCURACY] = config.useHighAccuracy
         }
     }
 
