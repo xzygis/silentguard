@@ -40,22 +40,94 @@ com.xzygis.silentguard/
     └── BootReceiver.kt          # 开机自启动
 ```
 
-## 构建
+## 下载安装
 
-### 前置条件
+前往 [Releases](https://github.com/xzygis/silentguard/releases) 页面下载最新的 APK 文件，传输到 Android 手机上直接安装。
 
-- Android Studio Hedgehog (2023.1.1) 或更高
-- JDK 8+
-- Android SDK 34
+> 需要在手机设置中允许「安装未知应用」。最低支持 Android 8.0。
 
-### 步骤
+如果你想自己编译，请参考下方构建指南。
+
+## 构建 APK
+
+提供两种方式：使用 Android Studio（推荐新手）或纯命令行。
+
+### 方式一：Android Studio（推荐）
+
+#### 1. 安装环境
+
+1. 下载并安装 [Android Studio](https://developer.android.com/studio)（自带 JDK 和 Android SDK）
+2. 首次启动时，按向导完成 SDK 安装（确保安装 **Android SDK 34**）
+
+#### 2. 克隆并打开项目
+
+```bash
+git clone https://github.com/xzygis/silentguard.git
+```
+
+打开 Android Studio → **File → Open** → 选择 `silentguard` 文件夹 → 等待右下角 Gradle 同步完成（首次可能需要几分钟下载依赖）。
+
+#### 3. 生成 APK
+
+- **Debug APK**（用于测试）：菜单栏 **Build → Build Bundle(s) / APK(s) → Build APK(s)**
+  - 生成位置：`app/build/outputs/apk/debug/app-debug.apk`
+- **Release APK**（用于分发）：菜单栏 **Build → Generate Signed Bundle / APK** → 选择 APK → 创建或选择签名密钥 → 完成
+
+#### 4. 安装到手机
+
+- USB 连接手机，开启 **开发者选项 → USB 调试**，点击 Android Studio 工具栏的 ▶️ 运行按钮
+- 或者将生成的 APK 文件传到手机上直接安装
+
+### 方式二：命令行构建（无需 Android Studio）
+
+#### 前置条件
+
+- JDK 17+（推荐 [Eclipse Temurin](https://adoptium.net/)）
+- 设置 `ANDROID_HOME` 环境变量指向 Android SDK（或在项目根目录创建 `local.properties` 文件写入 `sdk.dir=/path/to/android/sdk`）
+
+如果没有 Android SDK，可以通过 [sdkmanager](https://developer.android.com/tools/sdkmanager) 安装：
+
+```bash
+# macOS / Linux
+sdkmanager "platforms;android-34" "build-tools;34.0.0"
+```
+
+#### 构建
 
 ```bash
 git clone https://github.com/xzygis/silentguard.git
 cd silentguard
+
+# 生成 Debug APK
+./gradlew assembleDebug
+
+# APK 输出路径
+ls app/build/outputs/apk/debug/app-debug.apk
 ```
 
-用 Android Studio 打开项目，等待 Gradle 同步完成后，连接设备或启动模拟器运行。
+如需 Release APK：
+
+```bash
+./gradlew assembleRelease
+```
+
+> **注意**：Release 构建需要签名配置，否则生成的 APK 未签名无法直接安装。参考 [Android 签名文档](https://developer.android.com/studio/publish/app-signing)。
+
+#### 安装到手机
+
+```bash
+# 确保手机已连接并开启 USB 调试
+adb install app/build/outputs/apk/debug/app-debug.apk
+```
+
+### 常见问题
+
+| 问题 | 解决方案 |
+|------|----------|
+| Gradle 同步失败 | 检查网络连接；国内用户建议配置 Gradle 镜像（阿里云 maven） |
+| `SDK location not found` | 在项目根目录创建 `local.properties`，写入 `sdk.dir=/你的SDK路径` |
+| `JAVA_HOME is not set` | 安装 JDK 17+ 并设置 `JAVA_HOME` 环境变量 |
+| 手机上安装提示"未知来源" | 在手机设置中允许"安装未知应用" |
 
 ## 使用方法
 
