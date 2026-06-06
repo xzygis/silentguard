@@ -1,16 +1,54 @@
-# SilentGuard
+<p align="center">
+  <img src="app/src/main/res/drawable/ic_launcher_foreground.xml" width="120" alt="SilentGuard Logo" />
+</p>
 
-一个 Android 手机监控应用，可静默监控短信和 GPS 位置，并通过邮件自动转发到指定邮箱。
+<h1 align="center">SilentGuard</h1>
 
-## 功能
+<p align="center">
+  <strong>静默守护 — Android 短信与位置监控应用</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/xzygis/silentguard/actions/workflows/ci.yml">
+    <img src="https://github.com/xzygis/silentguard/actions/workflows/ci.yml/badge.svg" alt="CI" />
+  </a>
+  <a href="https://github.com/xzygis/silentguard/releases/latest">
+    <img src="https://img.shields.io/github/v/release/xzygis/silentguard?label=latest" alt="Latest Release" />
+  </a>
+  <a href="https://github.com/xzygis/silentguard/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/xzygis/silentguard" alt="License" />
+  </a>
+  <img src="https://img.shields.io/badge/Android-8.0%2B-brightgreen" alt="Min SDK" />
+  <img src="https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin" />
+</p>
+
+---
+
+SilentGuard 是一个开源的 Android 手机监控应用，可静默监控短信和 GPS 位置，并通过邮件自动转发到指定邮箱。适用于家长监护、个人设备追踪等场景。
+
+## ✨ 功能特性
 
 - **短信转发** — 实时监听收到的短信，自动转发到指定邮箱
 - **位置上报** — 按设定间隔定时获取 GPS 坐标，邮件发送（含 Google Maps 链接）
 - **开机自启** — 设备重启后自动恢复监控服务
 - **加密存储** — SMTP 密码使用 EncryptedSharedPreferences (AES256-GCM) 加密
 - **可靠投递** — 邮件发送失败自动重试（WorkManager + 指数退避）
+- **通知降级** — 国产 ROM 短信权限被拦截时，自动通过 NotificationListenerService 捕获
+- **协议兼容** — 同时支持 SSL (465) 和 STARTTLS (587) 加密协议
 
-## 技术栈
+## 📱 截图
+
+> 截图即将补充，欢迎贡献！
+
+<!--
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" width="200" />
+  <img src="docs/screenshots/settings.png" width="200" />
+  <img src="docs/screenshots/map.png" width="200" />
+</p>
+-->
+
+## 🏗️ 技术栈
 
 | 组件 | 技术 |
 |------|------|
@@ -18,131 +56,84 @@
 | UI | Jetpack Compose + Material3 |
 | 后台 | Foreground Service |
 | 定位 | Google Play Services FusedLocationProvider |
-| 邮件 | Jakarta Mail (SMTP over SSL) |
+| 地图 | 高德地图 SDK |
+| 邮件 | Jakarta Mail (SMTP over SSL/STARTTLS) |
 | 任务调度 | WorkManager |
+| 数据库 | Room |
 | 持久化 | DataStore + EncryptedSharedPreferences |
 | 最低版本 | Android 8.0 (API 26) |
 
-## 项目结构
+## 📥 下载安装
 
-```
-com.xzygis.silentguard/
-├── MainActivity.kt              # Compose 配置界面
-├── config/
-│   └── AppConfig.kt             # 配置管理（加密存储）
-├── mail/
-│   ├── MailSender.kt            # SMTP 邮件发送
-│   └── MailWorker.kt            # WorkManager 重试调度
-├── service/
-│   └── MonitorForegroundService.kt  # 前台服务（位置监控）
-└── receiver/
-    ├── SmsReceiver.kt           # 短信广播接收
-    └── BootReceiver.kt          # 开机自启动
-```
-
-## 下载安装
-
-前往 [Releases](https://github.com/xzygis/silentguard/releases) 页面下载最新的 APK 文件，传输到 Android 手机上直接安装。
+前往 [Releases](https://github.com/xzygis/silentguard/releases/latest) 页面下载最新的 APK 文件，传输到 Android 手机上直接安装。
 
 > 需要在手机设置中允许「安装未知应用」。最低支持 Android 8.0。
 
-如果你想自己编译，请参考下方构建指南。
+## 🔨 从源码构建
 
-## 构建 APK
+### 前置条件
 
-提供两种方式：使用 Android Studio（推荐新手）或纯命令行。
+- [Android Studio](https://developer.android.com/studio) (推荐) 或 JDK 17+
+- Android SDK 34
 
-### 方式一：Android Studio（推荐）
-
-#### 1. 安装环境
-
-1. 下载并安装 [Android Studio](https://developer.android.com/studio)（自带 JDK 和 Android SDK）
-2. 首次启动时，按向导完成 SDK 安装（确保安装 **Android SDK 34**）
-
-#### 2. 克隆并打开项目
-
-```bash
-git clone https://github.com/xzygis/silentguard.git
-```
-
-打开 Android Studio → **File → Open** → 选择 `silentguard` 文件夹 → 等待右下角 Gradle 同步完成（首次可能需要几分钟下载依赖）。
-
-#### 3. 生成 APK
-
-- **Debug APK**（用于测试）：菜单栏 **Build → Build Bundle(s) / APK(s) → Build APK(s)**
-  - 生成位置：`app/build/outputs/apk/debug/app-debug.apk`
-- **Release APK**（用于分发）：菜单栏 **Build → Generate Signed Bundle / APK** → 选择 APK → 创建或选择签名密钥 → 完成
-
-#### 4. 安装到手机
-
-- USB 连接手机，开启 **开发者选项 → USB 调试**，点击 Android Studio 工具栏的 ▶️ 运行按钮
-- 或者将生成的 APK 文件传到手机上直接安装
-
-### 方式二：命令行构建（无需 Android Studio）
-
-#### 前置条件
-
-- JDK 17+（推荐 [Eclipse Temurin](https://adoptium.net/)）
-- 设置 `ANDROID_HOME` 环境变量指向 Android SDK（或在项目根目录创建 `local.properties` 文件写入 `sdk.dir=/path/to/android/sdk`）
-
-如果没有 Android SDK，可以通过 [sdkmanager](https://developer.android.com/tools/sdkmanager) 安装：
-
-```bash
-# macOS / Linux
-sdkmanager "platforms;android-34" "build-tools;34.0.0"
-```
-
-#### 构建
+### 快速开始
 
 ```bash
 git clone https://github.com/xzygis/silentguard.git
 cd silentguard
+./gradlew assembleDebug
+```
 
-# 生成 Debug APK
+APK 输出路径：`app/build/outputs/apk/debug/app-debug.apk`
+
+<details>
+<summary>📖 详细构建指南</summary>
+
+#### 方式一：Android Studio（推荐新手）
+
+1. 下载并安装 [Android Studio](https://developer.android.com/studio)（自带 JDK 和 SDK）
+2. 首次启动按向导完成 SDK 安装（确保安装 **Android SDK 34**）
+3. **File → Open** → 选择 `silentguard` 文件夹 → 等待 Gradle 同步完成
+4. **Build → Build Bundle(s) / APK(s) → Build APK(s)** 生成 Debug APK
+5. USB 连接手机（开启 USB 调试），点击 ▶️ 运行按钮安装
+
+#### 方式二：命令行构建
+
+```bash
+# 设置 ANDROID_HOME 环境变量
+export ANDROID_HOME=$HOME/Library/Android/sdk  # macOS
+# export ANDROID_HOME=$HOME/Android/Sdk        # Linux
+
+# 构建
 ./gradlew assembleDebug
 
-# APK 输出路径
-ls app/build/outputs/apk/debug/app-debug.apk
-```
-
-如需 Release APK：
-
-```bash
-./gradlew assembleRelease
-```
-
-> **注意**：Release 构建需要签名配置，否则生成的 APK 未签名无法直接安装。参考 [Android 签名文档](https://developer.android.com/studio/publish/app-signing)。
-
-#### 安装到手机
-
-```bash
-# 确保手机已连接并开启 USB 调试
+# 安装到手机
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-### 常见问题
+#### 常见问题
 
 | 问题 | 解决方案 |
 |------|----------|
-| Gradle 同步失败 | 检查网络连接；国内用户建议配置 Gradle 镜像（阿里云 maven） |
-| `SDK location not found` | 在项目根目录创建 `local.properties`，写入 `sdk.dir=/你的SDK路径` |
-| `JAVA_HOME is not set` | 安装 JDK 17+ 并设置 `JAVA_HOME` 环境变量 |
-| 手机上安装提示"未知来源" | 在手机设置中允许"安装未知应用" |
+| Gradle 同步失败 | 检查网络；国内用户建议配置 Gradle 镜像 |
+| `SDK location not found` | 创建 `local.properties`，写入 `sdk.dir=/你的SDK路径` |
+| `JAVA_HOME is not set` | 安装 JDK 17+ 并设置 `JAVA_HOME` |
 
-## 使用方法
+</details>
+
+## 📖 使用方法
 
 1. 安装并打开应用，授予短信、位置、通知等权限
-2. 填写 SMTP 邮件配置（参考下方邮箱设置指引）
+2. 填写 SMTP 邮件配置（参考下方邮箱设置）
 3. 填写接收邮箱地址
 4. 设置位置上报间隔（分钟）
-5. 点击「保存配置」，可先点「发送测试邮件」验证
+5. 点击「保存配置」→「发送测试邮件」验证
 6. 开启监控开关
 
-## 邮箱设置指引
+<details>
+<summary>📧 邮箱 SMTP 配置指引</summary>
 
-本应用通过 SMTP 协议发送邮件，你需要一个支持 SMTP 的邮箱。以下是常见邮箱的配置方法：
-
-### 常见邮箱 SMTP 配置
+### 常见邮箱配置
 
 | 邮箱 | SMTP 服务器 | 端口 | 备注 |
 |------|-------------|------|------|
@@ -155,44 +146,65 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 ### 获取授权码
 
-大多数邮箱出于安全考虑，不允许直接用登录密码进行 SMTP 登录，需要单独生成一个「授权码」。
-
 #### QQ 邮箱
 
 1. 登录 [QQ 邮箱](https://mail.qq.com) 网页版
-2. 进入 **设置 → 账户**
-3. 找到「POP3/IMAP/SMTP/Exchange/CardDAV/CalDAV 服务」
-4. 开启 **IMAP/SMTP 服务**（需要手机验证）
-5. 验证后会生成一个 **授权码**，复制填入应用的「邮箱授权码」字段
+2. **设置 → 账户** → 找到「POP3/IMAP/SMTP 服务」
+3. 开启 **IMAP/SMTP 服务**（手机验证后获得授权码）
 
 #### 163 邮箱
 
-1. 登录 [163 邮箱](https://mail.163.com) 网页版
-2. 进入 **设置 → POP3/SMTP/IMAP**
-3. 开启 **IMAP/SMTP 服务**
-4. 按提示设置授权码，复制填入应用
+1. 登录 [163 邮箱](https://mail.163.com) → **设置 → POP3/SMTP/IMAP**
+2. 开启 **IMAP/SMTP 服务** → 按提示设置授权码
 
 #### Gmail
 
 1. 前往 [Google 账户安全设置](https://myaccount.google.com/security)
-2. 开启**两步验证**（如果尚未开启）
-3. 进入 **两步验证 → 应用专用密码**
-4. 选择"邮件"和设备，点击「生成」
-5. 复制 16 位应用密码，填入应用的「邮箱授权码」字段
+2. 开启 **两步验证** → **应用专用密码** → 生成 16 位密码
 
 ### 在应用中填写
 
 | 应用字段 | 填写内容 |
 |----------|----------|
 | SMTP 服务器 | 参考上表（如 `smtp.qq.com`） |
-| SMTP 端口 | 一般填 `465`（SSL 加密） |
-| 发送邮箱 | 你的完整邮箱地址（如 `xxx@qq.com`） |
+| SMTP 端口 | `465`（SSL）或 `587`（STARTTLS） |
+| 发送邮箱 | 你的完整邮箱地址 |
 | 邮箱授权码 | 上面获取的授权码（不是登录密码） |
-| 接收邮箱 | 接收监控通知的邮箱（可以和发送邮箱相同） |
+| 接收邮箱 | 接收监控通知的邮箱 |
 
-> **提示**：填完后点击「发送测试邮件」，如果收到邮件说明配置正确。如果失败，请检查授权码是否正确、SMTP 服务是否已开启。
+> 填完后点击「发送测试邮件」验证配置。
 
-## 权限说明
+</details>
+
+## 📂 项目结构
+
+```
+com.xzygis.silentguard/
+├── MainActivity.kt                     # Compose 主界面
+├── config/
+│   └── AppConfig.kt                    # 配置管理（加密存储）
+├── data/
+│   ├── AppDatabase.kt                  # Room 数据库
+│   ├── MonitorEvent.kt                 # 监控事件实体
+│   └── MonitorEventDao.kt              # 数据访问对象
+├── mail/
+│   ├── MailSender.kt                   # SMTP 邮件发送（SSL/STARTTLS）
+│   ├── MailWorker.kt                   # WorkManager 重试调度
+│   └── EmailScheduleWorker.kt          # 定时邮件任务
+├── service/
+│   ├── MonitorForegroundService.kt     # 前台服务（位置监控）
+│   └── SmsNotificationListenerService.kt  # 通知监听降级
+├── receiver/
+│   ├── SmsReceiver.kt                  # 短信广播接收
+│   └── BootReceiver.kt                 # 开机自启动
+└── ui/
+    ├── screen/                         # 各页面（仪表盘/设置/地图/日志）
+    ├── component/                      # 可复用组件
+    ├── navigation/                     # 导航定义
+    └── theme/                          # Material3 主题
+```
+
+## 🔒 权限说明
 
 | 权限 | 用途 |
 |------|------|
@@ -204,10 +216,20 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 | `RECEIVE_BOOT_COMPLETED` | 开机自启动 |
 | `POST_NOTIFICATIONS` | Android 13+ 通知权限 |
 
-## 免责声明
+## 🤝 贡献
+
+欢迎贡献！请阅读 [贡献指南](CONTRIBUTING.md) 了解如何参与。
+
+## 🔐 安全
+
+发现安全漏洞？请参阅 [安全策略](SECURITY.md) 了解报告方式。
+
+## ⚖️ 免责声明
 
 本项目仅供学习和个人设备管理使用。请确保在使用时遵守当地法律法规。未经他人同意在他人设备上安装监控软件可能违反法律。作者不对任何滥用行为承担责任。
 
-## License
+## 📄 License
 
-[MIT](LICENSE)
+本项目基于 [MIT License](LICENSE) 开源。
+
+Copyright © 2026 [eagle](https://github.com/xzygis)

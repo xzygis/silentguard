@@ -1,0 +1,103 @@
+name: Bug 报告
+description: 提交一个 Bug 报告，帮助我们改进 SilentGuard
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你提交 Bug 报告！请尽量详细地填写以下信息，以便我们快速定位和修复问题。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 简明扼要地描述遇到的问题
+      placeholder: 例如：应用在后台运行一段时间后，短信监控停止工作
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请提供详细的复现步骤
+      placeholder: |
+        1. 打开应用
+        2. 进入设置页面
+        3. 开启短信监控
+        4. 将应用切到后台
+        5. 等待约 30 分钟
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 描述你期望应用的正确行为
+      placeholder: 例如：应用应该持续在后台监控短信并正常发送邮件通知
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 描述实际观察到的行为
+      placeholder: 例如：后台运行约 30 分钟后，短信监控服务被系统杀死，不再接收短信
+    validations:
+      required: true
+
+  - type: input
+    id: android-version
+    attributes:
+      label: Android 版本
+      description: 设备的 Android 系统版本
+      placeholder: 例如：Android 14 (API 34)
+    validations:
+      required: true
+
+  - type: input
+    id: device-model
+    attributes:
+      label: 设备型号
+      description: 设备的品牌和型号
+      placeholder: 例如：小米 14 Pro / Samsung Galaxy S24
+    validations:
+      required: true
+
+  - type: input
+    id: rom
+    attributes:
+      label: 系统 ROM
+      description: 设备的定制 ROM 信息（如有）
+      placeholder: 例如：MIUI 15 / HyperOS 2.0 / ColorOS 14 / 原生 AOSP
+    validations:
+      required: false
+
+  - type: input
+    id: app-version
+    attributes:
+      label: 应用版本
+      description: SilentGuard 的版本号（可在设置页面查看）
+      placeholder: 例如：v1.0.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志信息
+      description: 如有相关的 Logcat 日志或崩溃堆栈，请粘贴在此处
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 补充信息
+      description: 其他任何可能有帮助的信息（截图、录屏等）
+    validations:
+      required: false
