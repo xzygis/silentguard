@@ -7,9 +7,13 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -211,14 +215,27 @@ private fun StatusHero(
         animationSpec = spring(stiffness = Spring.StiffnessLow),
         label = "statusColor"
     )
-    val pulseScale by animateFloatAsState(
-        targetValue = if (isGuarding) 1f else 0.9f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
+    val infiniteTransition = rememberInfiniteTransition(label = "guardBreathing")
+    val breathingScale by infiniteTransition.animateFloat(
+        initialValue = 0.96f,
+        targetValue = 1.12f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600),
+            repeatMode = RepeatMode.Reverse
         ),
-        label = "pulseScale"
+        label = "breathingScale"
     )
+    val breathingAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.18f,
+        targetValue = 0.38f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "breathingAlpha"
+    )
+    val indicatorScale = if (isGuarding) breathingScale else 0.9f
+    val haloAlpha = if (isGuarding) breathingAlpha else 0.16f
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -234,12 +251,12 @@ private fun StatusHero(
             Box(
                 modifier = Modifier
                     .size(56.dp)
-                    .scale(pulseScale)
+                    .scale(indicatorScale)
                     .clip(CircleShape)
                     .background(
                         Brush.radialGradient(
                             colors = listOf(
-                                statusColor.copy(alpha = 0.3f),
+                                statusColor.copy(alpha = haloAlpha),
                                 statusColor.copy(alpha = 0.05f)
                             )
                         )
