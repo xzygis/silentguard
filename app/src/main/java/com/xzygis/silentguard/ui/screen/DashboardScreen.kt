@@ -70,10 +70,7 @@ fun DashboardScreen(
     val smsToday by dao.getEventCountByTypeSince(EventType.SMS, todayStart).collectAsState(initial = 0)
     val recentEvents by dao.getRecentEvents(10).collectAsState(initial = emptyList())
     val pendingCount by dao.getEventCountByStatus(EventStatus.PENDING).collectAsState(initial = 0)
-    val latestSms by dao.getLatestEventByType(EventType.SMS).collectAsState(initial = null)
-    val latestLocation by dao.getLatestEventByType(EventType.LOCATION).collectAsState(initial = null)
     val latestMail by mailRecordDao.getLatestRecord().collectAsState(initial = null)
-    val unhealthyMailCount by mailRecordDao.getUnhealthyCount().collectAsState(initial = 0)
     val smsPermissionGranted = AppDiagnostics.hasSmsPermission(context)
     val smsNotificationReadEnabled = AppDiagnostics.hasNotificationReadAccess(context)
     val locationPermissionGranted = AppDiagnostics.hasLocationPermission(context)
@@ -157,17 +154,6 @@ fun DashboardScreen(
                     surfaceColor = LocationSurface
                 )
             }
-        }
-
-        item {
-            StatusOverviewCard(
-                latestSms = latestSms,
-                latestLocation = latestLocation,
-                latestMailTime = latestMail?.timestamp,
-                unhealthyMailCount = unhealthyMailCount,
-                onNavigateToActivityLog = onNavigateToActivityLog,
-                onNavigateToMap = onNavigateToMap
-            )
         }
 
         // 最近活动
@@ -414,92 +400,6 @@ private fun StatCard(
                 color = color.copy(alpha = 0.7f)
             )
         }
-    }
-}
-
-@Composable
-private fun StatusOverviewCard(
-    latestSms: MonitorEvent?,
-    latestLocation: MonitorEvent?,
-    latestMailTime: Long?,
-    unhealthyMailCount: Int,
-    onNavigateToActivityLog: () -> Unit,
-    onNavigateToMap: () -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = "最近状态",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold
-            )
-            OverviewRow(
-                label = "最近短信",
-                value = latestSms?.timestamp?.let { formatTime(it) } ?: "暂无",
-                tone = SmsColor,
-                onClick = onNavigateToActivityLog
-            )
-            OverviewRow(
-                label = "最近位置",
-                value = latestLocation?.timestamp?.let { formatTime(it) } ?: "暂无",
-                tone = LocationColor,
-                onClick = onNavigateToMap
-            )
-            OverviewRow(
-                label = "最近邮件",
-                value = latestMailTime?.let { formatTime(it) } ?: "暂无",
-                tone = Accent,
-                onClick = onNavigateToActivityLog
-            )
-            if (unhealthyMailCount > 0) {
-                OverviewRow(
-                    label = "异常邮件",
-                    value = "${unhealthyMailCount} 条需检查",
-                    tone = Error,
-                    onClick = onNavigateToActivityLog
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun OverviewRow(
-    label: String,
-    value: String,
-    tone: androidx.compose.ui.graphics.Color,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable { onClick() }
-            .background(tone.copy(alpha = 0.08f))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            fontWeight = FontWeight.Medium
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.labelMedium,
-            color = tone,
-            fontWeight = FontWeight.SemiBold
-        )
     }
 }
 

@@ -1,7 +1,5 @@
 package com.xzygis.silentguard.ui.screen
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.widget.Toast
@@ -27,8 +25,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -51,10 +47,6 @@ import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.config.MonitorConfig
-import com.xzygis.silentguard.data.EventStatus
-import com.xzygis.silentguard.data.EventType
-import com.xzygis.silentguard.data.MailSendRecordDao
-import com.xzygis.silentguard.data.MonitorEventDao
 import com.xzygis.silentguard.diagnostics.AppDiagnostics
 import com.xzygis.silentguard.location.AmapCoordinateConverter
 import com.xzygis.silentguard.location.AmapReverseGeocoder
@@ -72,25 +64,17 @@ import java.util.Locale
 fun SettingsScreen(
     appConfig: AppConfig,
     mailSender: MailSender,
-    dao: MonitorEventDao,
-    mailRecordDao: MailSendRecordDao,
     isGuarding: Boolean = false,
     onToggleGuarding: (Boolean) -> Unit = {}
 ) {
     val config by appConfig.configFlow.collectAsState(initial = MonitorConfig())
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val latestSms by dao.getLatestEventByType(EventType.SMS).collectAsState(initial = null)
-    val latestLocation by dao.getLatestEventByType(EventType.LOCATION).collectAsState(initial = null)
-    val latestMail by mailRecordDao.getLatestRecord().collectAsState(initial = null)
-    val pendingCount by dao.getEventCountByStatus(EventStatus.PENDING).collectAsState(initial = 0)
-    val unhealthyMailCount by mailRecordDao.getUnhealthyCount().collectAsState(initial = 0)
     val appVersionName = remember(context) {
         context.packageManager
             .getPackageInfo(context.packageName, 0)
             .versionName ?: "未知"
     }
-    var showClearConfirm by remember { mutableStateOf(false) }
 
     var smtpHost by remember(config.smtpHost) { mutableStateOf(config.smtpHost) }
     var smtpPort by remember(config.smtpPort) { mutableStateOf(config.smtpPort.toString()) }
@@ -136,33 +120,6 @@ fun SettingsScreen(
             amapWebApiKey = amapWebApiKey.trim()
         )
         appConfig.saveConfig(newConfig)
-    }
-
-    if (showClearConfirm) {
-        AlertDialog(
-            onDismissRequest = { showClearConfirm = false },
-            title = { Text("清空本地记录") },
-            text = { Text("将删除短信、位置和邮件发送记录。邮箱配置不会被删除。") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        scope.launch {
-                            dao.clearAll()
-                            mailRecordDao.clearAll()
-                            showClearConfirm = false
-                            Toast.makeText(context, "本地记录已清空", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                ) {
-                    Text("确认清空", color = Error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearConfirm = false }) {
-                    Text("取消")
-                }
-            }
-        )
     }
 
     Column(
@@ -351,46 +308,6 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-
-        SettingsSection(title = "诊断与数据") {
-            DiagnosticItem(
-                label = "待发送记录",
-                isReady = pendingCount == 0,
-                description = if (pendingCount == 0) "没有积压记录" else "$pendingCount 条记录等待发送"
-            )
-            DiagnosticItem(
-                label = "邮件发送",
-                isReady = unhealthyMailCount == 0,
-                description = if (unhealthyMailCount == 0) "最近发送状态正常" else "$unhealthyMailCount 条邮件记录需要检查"
-            )
-            OutlinedButton(
-                onClick = {
-                    val report = AppDiagnostics.buildReport(
-                        context = context,
-                        config = config,
-                        latestSms = latestSms,
-                        latestLocation = latestLocation,
-                        latestMail = latestMail,
-                        pendingCount = pendingCount,
-                        failedMailCount = unhealthyMailCount
-                    )
-                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText("SilentGuard 诊断报告", report))
-                    Toast.makeText(context, "诊断报告已复制", Toast.LENGTH_SHORT).show()
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("复制诊断报告")
-            }
-            OutlinedButton(
-                onClick = { showClearConfirm = true },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("清空本地记录", color = Error)
-            }
         }
 
         SettingsSection(title = "隐私与透明度") {

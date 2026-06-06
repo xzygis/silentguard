@@ -204,8 +204,6 @@ class MainActivity : ComponentActivity() {
                     SettingsScreen(
                         appConfig = appConfig,
                         mailSender = mailSender,
-                        dao = dao,
-                        mailRecordDao = mailRecordDao,
                         isGuarding = config.isGuardingEnabled,
                         onToggleGuarding = { toggleGuarding(it) }
                     )
