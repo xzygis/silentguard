@@ -59,6 +59,7 @@ class MonitorForegroundService : Service() {
     private lateinit var appConfig: AppConfig
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastRecordedLocation: Location? = null
+    private var lastLocationCallbackTime: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -72,6 +73,7 @@ class MonitorForegroundService : Service() {
         startForeground(NOTIFICATION_ID, notification)
         startLocationUpdates()
         startEmailScheduler()
+        startEmailCheckLoop()
         return START_STICKY
     }
 
@@ -124,9 +126,18 @@ class MonitorForegroundService : Service() {
 
     private fun startLocationUpdates() {
         serviceScope.launch {
-            val config = appConfig.configFlow.first()
-            requestLocationWithConfig(config.locationIntervalMinutes, config.useHighAccuracy)
-            observeDayNightSwitch(config.locationIntervalMinutes, config.useHighAccuracy)
+            try {
+                val config = appConfig.configFlow.first()
+                Log.d(TAG, "启动位置更新: 间隔=${config.locationIntervalMinutes}分钟, 高精度=${config.useHighAccuracy}")
+                requestLocationWithConfig(config.locationIntervalMinutes, config.useHighAccuracy)
+                observeDayNightSwitch(config.locationIntervalMinutes, config.useHighAccuracy)
+            } catch (e: Exception) {
+                Log.e(TAG, "启动位置更新失败: ${e.message}", e)
+                // 延迟重试
+                delay(30_000L)
+                Log.d(TAG, "尝试重新启动位置更新...")
+                startLocationUpdates()
+            }
         }
     }
 
@@ -156,6 +167,7 @@ class MonitorForegroundService : Service() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val location = result.lastLocation ?: return
+                lastLocationCallbackTime = System.currentTimeMillis()
 
                 // 位置重复过滤：距离上次记录 < 100m 则跳过
                 lastRecordedLocation?.let { last ->
@@ -234,12 +246,26 @@ class MonitorForegroundService : Service() {
         serviceScope.launch {
             var wasNight = isNightTime()
             while (isActive) {
-                delay(5 * 60 * 1000L) // 每 5 分钟检查一次昼夜切换
+                delay(5 * 60 * 1000L) // 每 5 分钟检查一次
                 val isNight = isNightTime()
                 if (isNight != wasNight) {
                     Log.d(TAG, "昼夜切换: ${if (isNight) "进入夜间模式" else "进入日间模式"}")
                     requestLocationWithConfig(baseIntervalMinutes, useHighAccuracy)
                     wasNight = isNight
+                }
+
+                // Watchdog: 如果超过预期间隔的 3 倍仍无回调，重新注册定位
+                val expectedInterval = if (isNight) {
+                    maxOf(baseIntervalMinutes, NIGHT_INTERVAL_MINUTES)
+                } else {
+                    baseIntervalMinutes
+                }
+                val watchdogThreshold = expectedInterval * 60 * 1000L * 3
+                if (lastLocationCallbackTime > 0 &&
+                    System.currentTimeMillis() - lastLocationCallbackTime > watchdogThreshold
+                ) {
+                    Log.w(TAG, "位置回调超时(${watchdogThreshold / 60000}分钟无回调)，重新注册定位请求")
+                    requestLocationWithConfig(baseIntervalMinutes, useHighAccuracy)
                 }
             }
         }
@@ -247,8 +273,53 @@ class MonitorForegroundService : Service() {
 
     private fun startEmailScheduler() {
         serviceScope.launch {
-            val config = appConfig.configFlow.first()
-            EmailScheduleWorker.schedule(this@MonitorForegroundService, config.emailIntervalMinutes.toLong())
+            try {
+                val config = appConfig.configFlow.first()
+                val intervalMinutes = config.emailIntervalMinutes.toLong()
+                Log.d(TAG, "启动邮件调度: 间隔=${intervalMinutes}分钟")
+                EmailScheduleWorker.schedule(this@MonitorForegroundService, intervalMinutes)
+            } catch (e: Exception) {
+                Log.e(TAG, "启动邮件调度失败: ${e.message}", e)
+                // 延迟重试
+                delay(10_000L)
+                startEmailScheduler()
+            }
+        }
+    }
+
+    /**
+     * 前台服务内的邮件发送循环，作为 WorkManager 周期任务的补充。
+     * 由于前台服务不受 Doze 限制，此循环能确保在 App 运行期间
+     * 按配置的间隔检查并触发待发送位置邮件。
+     */
+    private fun startEmailCheckLoop() {
+        serviceScope.launch {
+            try {
+                val config = appConfig.configFlow.first()
+                val intervalMillis = config.emailIntervalMinutes * 60 * 1000L
+                Log.d(TAG, "启动前台邮件检查循环: 间隔=${config.emailIntervalMinutes}分钟")
+
+                // 首次等待一个完整间隔
+                delay(intervalMillis)
+
+                while (isActive) {
+                    try {
+                        val dao = AppDatabase.getInstance(this@MonitorForegroundService).monitorEventDao()
+                        val pendingCount = dao.getPendingLocationEvents().size
+                        if (pendingCount > 0) {
+                            Log.d(TAG, "前台邮件检查: 发现 $pendingCount 条待发送位置记录，触发 EmailScheduleWorker")
+                            EmailScheduleWorker.schedule(this@MonitorForegroundService, config.emailIntervalMinutes.toLong())
+                        } else {
+                            Log.d(TAG, "前台邮件检查: 无待发送记录")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "前台邮件检查失败: ${e.message}", e)
+                    }
+                    delay(intervalMillis)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "邮件检查循环启动失败: ${e.message}", e)
+            }
         }
     }
 }
