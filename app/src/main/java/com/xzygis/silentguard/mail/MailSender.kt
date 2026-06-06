@@ -9,7 +9,6 @@ import com.xzygis.silentguard.data.MailSendStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import java.util.Properties
 import jakarta.mail.Authenticator
 import jakarta.mail.Message
 import jakarta.mail.PasswordAuthentication
@@ -26,7 +25,12 @@ class MailSender(private val context: Context) {
 
     private val appConfig = AppConfig(context)
 
-    suspend fun sendMail(subject: String, body: String, isHtml: Boolean = false): Boolean {
+    suspend fun sendMail(
+        subject: String,
+        body: String,
+        isHtml: Boolean = false,
+        retryCount: Int = 0
+    ): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 val config = appConfig.configFlow.first()
@@ -37,27 +41,13 @@ class MailSender(private val context: Context) {
                         subject = subject,
                         recipient = config.recipientEmail,
                         status = MailSendStatus.FAILED,
-                        errorMessage = "邮件配置不完整"
+                        errorMessage = "邮件配置不完整",
+                        retryCount = retryCount
                     )
                     return@withContext false
                 }
 
-                val properties = Properties().apply {
-                    put("mail.smtp.host", config.smtpHost)
-                    put("mail.smtp.port", config.smtpPort.toString())
-                    put("mail.smtp.auth", "true")
-
-                    if (config.smtpPort == 587) {
-                        // STARTTLS（Outlook 等）
-                        put("mail.smtp.starttls.enable", "true")
-                        put("mail.smtp.starttls.required", "true")
-                    } else {
-                        // SSL（QQ、163、Gmail、飞书等，端口 465）
-                        put("mail.smtp.ssl.enable", "true")
-                        put("mail.smtp.socketFactory.class", "javax.net.ssl.SSLSocketFactory")
-                        put("mail.smtp.socketFactory.port", config.smtpPort.toString())
-                    }
-                }
+                val properties = SmtpPropertiesBuilder.build(config.smtpHost, config.smtpPort)
 
                 val session = Session.getInstance(properties, object : Authenticator() {
                     override fun getPasswordAuthentication(): PasswordAuthentication {
@@ -82,7 +72,8 @@ class MailSender(private val context: Context) {
                 recordMailResult(
                     subject = subject,
                     recipient = config.recipientEmail,
-                    status = MailSendStatus.SENT
+                    status = MailSendStatus.SENT,
+                    retryCount = retryCount
                 )
                 return@withContext true
             } catch (e: Exception) {
@@ -90,8 +81,9 @@ class MailSender(private val context: Context) {
                 recordMailResult(
                     subject = subject,
                     recipient = runCatching { appConfig.configFlow.first().recipientEmail }.getOrDefault(""),
-                    status = MailSendStatus.FAILED,
-                    errorMessage = e.message.orEmpty()
+                    status = if (retryCount > 0) MailSendStatus.RETRYING else MailSendStatus.FAILED,
+                    errorMessage = e.message.orEmpty(),
+                    retryCount = retryCount
                 )
                 return@withContext false
             }
@@ -102,7 +94,8 @@ class MailSender(private val context: Context) {
         subject: String,
         recipient: String,
         status: MailSendStatus,
-        errorMessage: String = ""
+        errorMessage: String = "",
+        retryCount: Int = 0
     ) {
         runCatching {
             AppDatabase.getInstance(context).mailSendRecordDao().insert(
@@ -110,7 +103,8 @@ class MailSender(private val context: Context) {
                     subject = subject,
                     recipient = recipient,
                     status = status,
-                    errorMessage = errorMessage
+                    errorMessage = errorMessage,
+                    retryCount = retryCount
                 )
             )
         }.onFailure { e ->

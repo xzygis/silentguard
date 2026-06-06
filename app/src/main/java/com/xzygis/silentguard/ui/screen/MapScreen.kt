@@ -222,9 +222,9 @@ private fun renderTrackOnMap(
 
     mapLocations.forEachIndexed { index, (event, latLng) ->
         val statusStr = when (event.status) {
-            EventStatus.SENT -> "已上报"
-            EventStatus.FAILED -> "上报失败"
-            EventStatus.PENDING -> "待上报"
+            EventStatus.SENT -> "已发送"
+            EventStatus.FAILED -> "发送失败"
+            EventStatus.PENDING -> "待发送"
         }
         val statusColor = when (event.status) {
             EventStatus.SENT -> AndroidColor.parseColor("#0F9F7A")

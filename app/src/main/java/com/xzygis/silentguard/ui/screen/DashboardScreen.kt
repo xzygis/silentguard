@@ -1,11 +1,5 @@
 package com.xzygis.silentguard.ui.screen
 
-import android.Manifest
-import android.content.ComponentName
-import android.content.pm.PackageManager
-import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -46,13 +40,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import com.xzygis.silentguard.config.MonitorConfig
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
+import com.xzygis.silentguard.data.MailSendRecordDao
 import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.data.MonitorEventDao
-import com.xzygis.silentguard.service.SmsNotificationListenerService
+import com.xzygis.silentguard.diagnostics.AppDiagnostics
 import com.xzygis.silentguard.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -63,6 +57,7 @@ import java.util.concurrent.TimeUnit
 fun DashboardScreen(
     isGuarding: Boolean,
     dao: MonitorEventDao,
+    mailRecordDao: MailSendRecordDao,
     config: MonitorConfig,
     onToggleGuarding: (Boolean) -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
@@ -73,20 +68,13 @@ fun DashboardScreen(
     val todayStart = getTodayStartMillis()
     val totalToday by dao.getEventCountSince(todayStart).collectAsState(initial = 0)
     val smsToday by dao.getEventCountByTypeSince(EventType.SMS, todayStart).collectAsState(initial = 0)
-    val locationToday by dao.getEventCountByTypeSince(EventType.LOCATION, todayStart).collectAsState(initial = 0)
     val recentEvents by dao.getRecentEvents(10).collectAsState(initial = emptyList())
-    val smsPermissionGranted = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.RECEIVE_SMS
-    ) == PackageManager.PERMISSION_GRANTED
-    val smsNotificationReadEnabled = rememberSmsNotificationReadEnabled()
-    val locationPermissionGranted = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.ACCESS_FINE_LOCATION
-    ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.ACCESS_COARSE_LOCATION
-    ) == PackageManager.PERMISSION_GRANTED
+    val pendingCount by dao.getEventCountByStatus(EventStatus.PENDING).collectAsState(initial = 0)
+    val latestMail by mailRecordDao.getLatestRecord().collectAsState(initial = null)
+    val smsPermissionGranted = AppDiagnostics.hasSmsPermission(context)
+    val smsNotificationReadEnabled = AppDiagnostics.hasNotificationReadAccess(context)
+    val locationPermissionGranted = AppDiagnostics.hasLocationPermission(context)
+    val batteryReady = AppDiagnostics.isIgnoringBatteryOptimizations(context)
     val mailConfigured = config.senderEmail.isNotBlank() &&
             config.senderPassword.isNotBlank() &&
             config.recipientEmail.isNotBlank()
@@ -96,26 +84,27 @@ fun DashboardScreen(
             "短信记录", smsReady,
             if (smsPermissionGranted) "短信权限已开启" else if (smsNotificationReadEnabled) "短信通知读取已开启" else "开启短信权限，或允许读取短信通知",
             onClick = if (smsReady) onNavigateToActivityLog else {
-                { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+                { context.startActivity(AppDiagnostics.notificationAccessIntent()) }
             }
         ),
         HealthItem(
             "定位记录", locationPermissionGranted,
             if (locationPermissionGranted) "定位权限已开启" else "需要定位权限",
             onClick = if (locationPermissionGranted) onNavigateToMap else {
-                {
-                    context.startActivity(
-                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = Uri.parse("package:${context.packageName}")
-                        }
-                    )
-                }
+                { context.startActivity(AppDiagnostics.appDetailsIntent(context)) }
             }
         ),
         HealthItem(
             "邮件发送", mailConfigured,
-            if (mailConfigured) "接收邮箱已配置" else "请先配置邮箱",
+            if (mailConfigured) "最近: ${latestMail?.status ?: "暂无记录"}" else "请先配置邮箱",
             onClick = if (!mailConfigured) onNavigateToSettings else null
+        ),
+        HealthItem(
+            "后台运行", batteryReady,
+            if (batteryReady) "已忽略电池优化" else "建议允许后台运行",
+            onClick = if (batteryReady) null else {
+                { context.startActivity(AppDiagnostics.batteryOptimizationIntent()) }
+            }
         )
     )
 
@@ -159,8 +148,8 @@ fun DashboardScreen(
                 )
                 StatCard(
                     modifier = Modifier.weight(1f),
-                    value = locationToday.toString(),
-                    label = "位置记录",
+                    value = pendingCount.toString(),
+                    label = "待发送",
                     color = LocationColor,
                     surfaceColor = LocationSurface
                 )
@@ -331,23 +320,6 @@ private enum class GuardState(
     HEALTHY("守护正常", "短信记录、位置记录与邮件发送已准备好", Success),
     NEEDS_ATTENTION("需要处理", "有关键能力未就绪，建议先完成配置", Warning),
     STOPPED("守护已停止", "启动后将开始记录并按计划发送", TextTertiary)
-}
-
-@Composable
-private fun rememberSmsNotificationReadEnabled(): Boolean {
-    val context = LocalContext.current
-    val enabledListeners = Settings.Secure.getString(
-        context.contentResolver,
-        "enabled_notification_listeners"
-    )
-    val componentName = ComponentName(
-        context,
-        SmsNotificationListenerService::class.java
-    ).flattenToString()
-
-    return enabledListeners
-        ?.split(":")
-        ?.any { it.equals(componentName, ignoreCase = true) } == true
 }
 
 @Composable

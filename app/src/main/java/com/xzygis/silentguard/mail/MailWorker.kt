@@ -10,6 +10,14 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.xzygis.silentguard.config.AppConfig
+import com.xzygis.silentguard.data.AppDatabase
+import com.xzygis.silentguard.data.MailSendRecord
+import com.xzygis.silentguard.data.MailSendStatus
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 class MailWorker(
@@ -41,6 +49,24 @@ class MailWorker(
                 .build()
 
             WorkManager.getInstance(context).enqueue(request)
+            recordQueuedMail(context.applicationContext, subject)
+        }
+
+        private fun recordQueuedMail(context: Context, subject: String) {
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching {
+                    val recipient = AppConfig(context).configFlow.first().recipientEmail
+                    AppDatabase.getInstance(context).mailSendRecordDao().insert(
+                        MailSendRecord(
+                            subject = subject,
+                            recipient = recipient,
+                            status = MailSendStatus.QUEUED
+                        )
+                    )
+                }.onFailure { e ->
+                    Log.w(TAG, "邮件队列记录写入失败: ${e.message}")
+                }
+            }
         }
     }
 
@@ -50,7 +76,12 @@ class MailWorker(
         val isHtml = inputData.getBoolean(KEY_IS_HTML, false)
 
         val mailSender = MailSender(applicationContext)
-        val success = mailSender.sendMail(subject, body, isHtml)
+        val success = mailSender.sendMail(
+            subject = subject,
+            body = body,
+            isHtml = isHtml,
+            retryCount = runAttemptCount
+        )
 
         return if (success) {
             Log.i(TAG, "邮件发送成功: $subject")

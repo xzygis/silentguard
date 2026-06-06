@@ -159,6 +159,7 @@ class MainActivity : ComponentActivity() {
                     DashboardScreen(
                         isGuarding = config.isGuardingEnabled,
                         dao = dao,
+                        mailRecordDao = mailRecordDao,
                         config = config,
                         onToggleGuarding = { toggleGuarding(it) },
                         onNavigateToSettings = {
