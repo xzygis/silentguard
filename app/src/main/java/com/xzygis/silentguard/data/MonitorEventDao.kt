@@ -24,6 +24,9 @@ interface MonitorEventDao {
     @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND latitude IS NOT NULL ORDER BY timestamp DESC")
     fun getLocationEvents(): Flow<List<MonitorEvent>>
 
+    @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND latitude IS NOT NULL ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getLatestLocationEvent(): MonitorEvent?
+
     @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND latitude IS NOT NULL AND timestamp BETWEEN :startTime AND :endTime ORDER BY timestamp ASC")
     fun getLocationEventsBetween(startTime: Long, endTime: Long): Flow<List<MonitorEvent>>
 

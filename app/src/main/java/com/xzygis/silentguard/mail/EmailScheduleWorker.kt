@@ -62,7 +62,7 @@ class EmailScheduleWorker(
 
             val subject = "[位置] ${pendingEvents.size}条位置记录"
 
-            if (mapUrl != null) {
+            val mailSent = if (mapUrl != null) {
                 // HTML 邮件：内嵌地图 + 位置详情
                 val htmlBody = buildString {
                     appendLine("<!DOCTYPE html><html><body style=\"font-family:sans-serif;color:#333;\">")
@@ -90,7 +90,7 @@ class EmailScheduleWorker(
                     appendLine("<p style=\"margin-top:16px;font-size:12px;color:#999;\">由 SilentGuard 自动发送</p>")
                     appendLine("</body></html>")
                 }
-                MailWorker.enqueue(applicationContext, subject, htmlBody, isHtml = true)
+                MailSender(applicationContext).sendMail(subject, htmlBody, isHtml = true)
             } else {
                 // 降级：纯文本邮件（未配置高德 Key）
                 val body = buildString {
@@ -100,13 +100,18 @@ class EmailScheduleWorker(
                         appendLine()
                     }
                 }
-                MailWorker.enqueue(applicationContext, subject, body)
+                MailSender(applicationContext).sendMail(subject, body)
+            }
+
+            if (!mailSent) {
+                Log.w(TAG, "位置邮件发送失败，保留${pendingEvents.size}条记录为待发送")
+                return Result.retry()
             }
 
             pendingEvents.forEach { event ->
                 dao.updateStatus(event.id, EventStatus.SENT)
             }
-            Log.d(TAG, "批量发送${pendingEvents.size}条位置邮件")
+            Log.d(TAG, "位置邮件发送成功，已标记${pendingEvents.size}条记录为已发送")
             Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "邮件调度失败: ${e.message}", e)

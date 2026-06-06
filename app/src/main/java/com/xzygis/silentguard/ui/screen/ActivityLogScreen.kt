@@ -113,9 +113,9 @@ fun ActivityLogScreen(dao: MonitorEventDao) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = when (selectedFilter) {
-                            FilterType.ALL -> "事件将在监控启动后出现"
-                            FilterType.SMS -> "暂无短信拦截记录"
-                            FilterType.LOCATION -> "暂无位置上报记录"
+                            FilterType.ALL -> "记录将在守护启动后出现"
+                            FilterType.SMS -> "暂无短信记录"
+                            FilterType.LOCATION -> "暂无位置记录"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
@@ -188,9 +188,9 @@ private fun EventCard(
         EventType.LOCATION -> "GPS"
     }
     val statusLabel = when (event.status) {
-        EventStatus.SENT -> "已上报"
-        EventStatus.PENDING -> "待上报"
-        EventStatus.FAILED -> "上报失败"
+        EventStatus.SENT -> "已发送"
+        EventStatus.PENDING -> "待发送"
+        EventStatus.FAILED -> "发送失败"
     }
     val statusColor = when (event.status) {
         EventStatus.SENT -> Success

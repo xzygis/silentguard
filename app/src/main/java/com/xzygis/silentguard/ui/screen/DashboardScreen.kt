@@ -3,6 +3,8 @@ package com.xzygis.silentguard.ui.screen
 import android.Manifest
 import android.content.ComponentName
 import android.content.pm.PackageManager
+import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
@@ -55,10 +57,13 @@ import java.util.concurrent.TimeUnit
 
 @Composable
 fun DashboardScreen(
-    isMonitoring: Boolean,
+    isGuarding: Boolean,
     dao: MonitorEventDao,
     config: MonitorConfig,
-    onToggleMonitoring: (Boolean) -> Unit = {}
+    onToggleGuarding: (Boolean) -> Unit = {},
+    onNavigateToSettings: () -> Unit = {},
+    onNavigateToActivityLog: () -> Unit = {},
+    onNavigateToMap: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val todayStart = getTodayStartMillis()
@@ -70,7 +75,7 @@ fun DashboardScreen(
         context,
         Manifest.permission.RECEIVE_SMS
     ) == PackageManager.PERMISSION_GRANTED
-    val notificationListenerEnabled = rememberNotificationListenerEnabled()
+    val smsNotificationReadEnabled = rememberSmsNotificationReadEnabled()
     val locationPermissionGranted = ContextCompat.checkSelfPermission(
         context,
         Manifest.permission.ACCESS_FINE_LOCATION
@@ -81,12 +86,33 @@ fun DashboardScreen(
     val mailConfigured = config.senderEmail.isNotBlank() &&
             config.senderPassword.isNotBlank() &&
             config.recipientEmail.isNotBlank()
-    val smsReady = smsPermissionGranted || notificationListenerEnabled
+    val smsReady = smsPermissionGranted || smsNotificationReadEnabled
     val healthItems = listOf(
-        HealthItem("短信捕获", smsReady, if (smsPermissionGranted) "短信权限已开启" else if (notificationListenerEnabled) "通知监听已开启" else "需要短信权限或通知监听"),
-        HealthItem("定位记录", locationPermissionGranted, if (locationPermissionGranted) "定位权限已开启" else "需要定位权限"),
-        HealthItem("邮件上报", mailConfigured, if (mailConfigured) "接收邮箱已配置" else "请先配置邮箱"),
-        HealthItem("后台守护", isMonitoring, if (isMonitoring) "服务运行中" else "点击启动守护")
+        HealthItem(
+            "短信记录", smsReady,
+            if (smsPermissionGranted) "短信权限已开启" else if (smsNotificationReadEnabled) "短信通知读取已开启" else "开启短信权限，或允许读取短信通知",
+            onClick = if (smsReady) onNavigateToActivityLog else {
+                { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+            }
+        ),
+        HealthItem(
+            "定位记录", locationPermissionGranted,
+            if (locationPermissionGranted) "定位权限已开启" else "需要定位权限",
+            onClick = if (locationPermissionGranted) onNavigateToMap else {
+                {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                    )
+                }
+            }
+        ),
+        HealthItem(
+            "邮件发送", mailConfigured,
+            if (mailConfigured) "接收邮箱已配置" else "请先配置邮箱",
+            onClick = if (!mailConfigured) onNavigateToSettings else null
+        )
     )
 
     LazyColumn(
@@ -101,9 +127,9 @@ fun DashboardScreen(
         // 状态英雄区
         item {
             StatusHero(
-                isMonitoring = isMonitoring,
+                isGuarding = isGuarding,
                 healthItems = healthItems,
-                onToggleMonitoring = onToggleMonitoring
+                onToggleGuarding = onToggleGuarding
             )
         }
 
@@ -116,21 +142,21 @@ fun DashboardScreen(
                 StatCard(
                     modifier = Modifier.weight(1f),
                     value = totalToday.toString(),
-                    label = "今日事件",
+                    label = "今日记录",
                     color = Accent,
                     surfaceColor = AccentSurface
                 )
                 StatCard(
                     modifier = Modifier.weight(1f),
                     value = smsToday.toString(),
-                    label = "短信拦截",
+                    label = "短信记录",
                     color = SmsColor,
                     surfaceColor = SmsSurface
                 )
                 StatCard(
                     modifier = Modifier.weight(1f),
                     value = locationToday.toString(),
-                    label = "位置上报",
+                    label = "位置记录",
                     color = LocationColor,
                     surfaceColor = LocationSurface
                 )
@@ -164,18 +190,19 @@ fun DashboardScreen(
 private data class HealthItem(
     val label: String,
     val isReady: Boolean,
-    val description: String
+    val description: String,
+    val onClick: (() -> Unit)? = null
 )
 
 @Composable
 private fun StatusHero(
-    isMonitoring: Boolean,
+    isGuarding: Boolean,
     healthItems: List<HealthItem>,
-    onToggleMonitoring: (Boolean) -> Unit
+    onToggleGuarding: (Boolean) -> Unit
 ) {
     val issueCount = healthItems.count { !it.isReady }
     val guardState = when {
-        !isMonitoring -> GuardState.STOPPED
+        !isGuarding -> GuardState.STOPPED
         issueCount == 0 -> GuardState.HEALTHY
         else -> GuardState.NEEDS_ATTENTION
     }
@@ -185,7 +212,7 @@ private fun StatusHero(
         label = "statusColor"
     )
     val pulseScale by animateFloatAsState(
-        targetValue = if (isMonitoring) 1f else 0.9f,
+        targetValue = if (isGuarding) 1f else 0.9f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessLow
@@ -260,17 +287,17 @@ private fun StatusHero(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onToggleMonitoring(!isMonitoring) },
+                    .clickable { onToggleGuarding(!isGuarding) },
                 shape = RoundedCornerShape(14.dp),
-                color = if (isMonitoring) ErrorSurface else Accent
+                color = if (isGuarding) ErrorSurface else Accent
             ) {
                 Text(
-                    text = if (isMonitoring) "停止守护" else "启动守护",
+                    text = if (isGuarding) "停止守护" else "启动守护",
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 13.dp),
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (isMonitoring) Error else OnPrimary,
+                    color = if (isGuarding) Error else OnPrimary,
                     fontWeight = FontWeight.SemiBold,
                     textAlign = TextAlign.Center
                 )
@@ -284,13 +311,13 @@ private enum class GuardState(
     val subtitle: String,
     val color: androidx.compose.ui.graphics.Color
 ) {
-    HEALTHY("守护正常", "短信、定位与邮件链路已准备好", Success),
+    HEALTHY("守护正常", "短信记录、位置记录与邮件发送已准备好", Success),
     NEEDS_ATTENTION("需要处理", "有关键能力未就绪，建议先完成配置", Warning),
-    STOPPED("守护已停止", "启动后将开始记录并按计划上报", TextTertiary)
+    STOPPED("守护已停止", "启动后将开始记录并按计划发送", TextTertiary)
 }
 
 @Composable
-private fun rememberNotificationListenerEnabled(): Boolean {
+private fun rememberSmsNotificationReadEnabled(): Boolean {
     val context = LocalContext.current
     val enabledListeners = Settings.Secure.getString(
         context.contentResolver,
@@ -308,13 +335,20 @@ private fun rememberNotificationListenerEnabled(): Boolean {
 
 @Composable
 private fun HealthStatusRow(item: HealthItem) {
+    val clickModifier = if (item.onClick != null) {
+        Modifier.clickable { item.onClick.invoke() }
+    } else {
+        Modifier
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
             .background(
                 color = if (item.isReady) SuccessSurface else WarningSurface,
                 shape = RoundedCornerShape(12.dp)
             )
+            .then(clickModifier)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -483,7 +517,7 @@ private fun EmptyState() {
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "启动监控后将在此显示事件",
+                text = "启动守护后将在此显示记录",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             )

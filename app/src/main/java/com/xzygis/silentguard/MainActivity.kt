@@ -64,8 +64,8 @@ class MainActivity : ComponentActivity() {
             val smsDenied = denied.any {
                 it == Manifest.permission.RECEIVE_SMS || it == Manifest.permission.READ_SMS
             }
-            if (smsDenied && !isNotificationListenerEnabled()) {
-                showNotificationListenerGuide()
+            if (smsDenied && !isSmsNotificationReadEnabled()) {
+                showSmsNotificationReadGuide()
             } else if (denied.isNotEmpty()) {
                 Toast.makeText(this, "部分权限被拒绝，功能可能受限", Toast.LENGTH_LONG).show()
             }
@@ -139,7 +139,7 @@ class MainActivity : ComponentActivity() {
                                 selectedTextColor = MaterialTheme.colorScheme.primary,
                                 unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                 unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                                indicatorColor = MaterialTheme.colorScheme.surface
                             )
                         )
                     }
@@ -155,10 +155,37 @@ class MainActivity : ComponentActivity() {
             ) {
                 composable(Screen.Dashboard.route) {
                     DashboardScreen(
-                        isMonitoring = config.isMonitoringEnabled,
+                        isGuarding = config.isGuardingEnabled,
                         dao = dao,
                         config = config,
-                        onToggleMonitoring = { toggleMonitoring(it) }
+                        onToggleGuarding = { toggleGuarding(it) },
+                        onNavigateToSettings = {
+                            navController.navigate(Screen.Settings.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        onNavigateToActivityLog = {
+                            navController.navigate(Screen.ActivityLog.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        onNavigateToMap = {
+                            navController.navigate(Screen.Map.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
                     )
                 }
                 composable(Screen.ActivityLog.route) {
@@ -171,17 +198,17 @@ class MainActivity : ComponentActivity() {
                     SettingsScreen(
                         appConfig = appConfig,
                         mailSender = mailSender,
-                        isMonitoring = config.isMonitoringEnabled,
-                        onToggleMonitoring = { toggleMonitoring(it) }
+                        isGuarding = config.isGuardingEnabled,
+                        onToggleGuarding = { toggleGuarding(it) }
                     )
                 }
             }
         }
     }
 
-    private fun toggleMonitoring(enabled: Boolean) {
+    private fun toggleGuarding(enabled: Boolean) {
         kotlinx.coroutines.MainScope().launch {
-            appConfig.setMonitoringEnabled(enabled)
+            appConfig.setGuardingEnabled(enabled)
         }
 
         val serviceIntent = Intent(this, MonitorForegroundService::class.java)
@@ -191,10 +218,10 @@ class MainActivity : ComponentActivity() {
             } else {
                 startService(serviceIntent)
             }
-            Toast.makeText(this, "监控已启动", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "守护已启动", Toast.LENGTH_SHORT).show()
         } else {
             stopService(serviceIntent)
-            Toast.makeText(this, "监控已停止", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "守护已停止", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -217,43 +244,43 @@ class MainActivity : ComponentActivity() {
         if (notGranted.isNotEmpty()) {
             permissionLauncher.launch(notGranted.toTypedArray())
         } else {
-            // 权限已全部授予，但也检查一下通知监听（可能之前通过通知监听降级的）
-            checkSmsPermissionFallback()
+            // 权限已全部授予，但也检查一下短信通知读取兼容方案是否需要启用
+            checkSmsNotificationReadFallback()
         }
     }
 
     /**
-     * 检查短信权限状态，如果被拒则引导开启通知监听
+     * 检查短信权限状态，如果被拒则引导开启短信通知读取权限
      */
-    private fun checkSmsPermissionFallback() {
+    private fun checkSmsNotificationReadFallback() {
         val smsGranted = ContextCompat.checkSelfPermission(
             this, Manifest.permission.RECEIVE_SMS
         ) == PackageManager.PERMISSION_GRANTED
 
-        if (!smsGranted && !isNotificationListenerEnabled()) {
-            showNotificationListenerGuide()
+        if (!smsGranted && !isSmsNotificationReadEnabled()) {
+            showSmsNotificationReadGuide()
         }
     }
 
     /**
-     * 检查通知监听权限是否已开启
+     * 检查短信通知读取权限是否已开启
      */
-    private fun isNotificationListenerEnabled(): Boolean {
+    private fun isSmsNotificationReadEnabled(): Boolean {
         val cn = ComponentName(this, SmsNotificationListenerService::class.java)
         val flat = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
         return flat != null && flat.contains(cn.flattenToString())
     }
 
     /**
-     * 弹出对话框引导用户开启通知监听权限
+     * 弹出对话框引导用户开启短信通知读取权限
      */
-    private fun showNotificationListenerGuide() {
+    private fun showSmsNotificationReadGuide() {
         AlertDialog.Builder(this)
-            .setTitle("短信监控权限")
+            .setTitle("短信记录权限")
             .setMessage(
                 "系统拒绝了短信权限的授予。\n\n" +
                 "您可以开启「通知使用权」作为替代方案，" +
-                "应用将通过监听短信通知来实现短信转发功能。\n\n" +
+                "应用将读取短信通知内容，用于生成邮件提醒。\n\n" +
                 "点击「去设置」后，在列表中找到 SilentGuard 并开启。"
             )
             .setPositiveButton("去设置") { _, _ ->

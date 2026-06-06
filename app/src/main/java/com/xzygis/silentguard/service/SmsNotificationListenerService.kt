@@ -18,7 +18,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 通过监听通知栏来捕获短信，作为 RECEIVE_SMS 权限被拒时的降级方案。
+ * 通过读取通知栏内容记录短信，作为 RECEIVE_SMS 权限被拒时的兼容方案。
  * 用户只需在系统设置中开启"通知使用权"即可，无需 ADB。
  */
 class SmsNotificationListenerService : NotificationListenerService() {
@@ -55,7 +55,7 @@ class SmsNotificationListenerService : NotificationListenerService() {
         // 忽略空内容
         if (text.isBlank()) return
 
-        Log.d(TAG, "捕获短信通知 - 来自: $title, 内容: ${text.take(20)}...")
+        Log.d(TAG, "读取短信通知 - 来自: $title, 内容: ${text.take(20)}...")
 
         scope.launch {
             try {
@@ -67,7 +67,7 @@ class SmsNotificationListenerService : NotificationListenerService() {
                 val body = buildString {
                     appendLine("发送者: $title")
                     appendLine("时间: $currentTime")
-                    appendLine("来源: 通知监听")
+                    appendLine("来源: 短信通知")
                     appendLine("内容:")
                     appendLine(text)
                 }

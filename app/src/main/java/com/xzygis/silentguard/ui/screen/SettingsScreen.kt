@@ -1,6 +1,9 @@
 package com.xzygis.silentguard.ui.screen
 
+import android.content.Context
+import android.content.pm.PackageManager
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -30,7 +33,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -38,27 +40,38 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.config.MonitorConfig
 import com.xzygis.silentguard.mail.MailSender
 import com.xzygis.silentguard.ui.theme.*
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-@OptIn(FlowPreview::class)
 @Composable
 fun SettingsScreen(
     appConfig: AppConfig,
     mailSender: MailSender,
-    isMonitoring: Boolean = false,
-    onToggleMonitoring: (Boolean) -> Unit = {}
+    isGuarding: Boolean = false,
+    onToggleGuarding: (Boolean) -> Unit = {}
 ) {
     val config by appConfig.configFlow.collectAsState(initial = MonitorConfig())
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val appVersionName = remember(context) {
+        context.packageManager
+            .getPackageInfo(context.packageName, 0)
+            .versionName ?: "未知"
+    }
 
     var smtpHost by remember(config.smtpHost) { mutableStateOf(config.smtpHost) }
     var smtpPort by remember(config.smtpPort) { mutableStateOf(config.smtpPort.toString()) }
@@ -70,27 +83,37 @@ fun SettingsScreen(
     var useHighAccuracy by remember(config.useHighAccuracy) { mutableStateOf(config.useHighAccuracy) }
     var amapWebApiKey by remember(config.amapWebApiKey) { mutableStateOf(config.amapWebApiKey) }
 
+    // 标记 config 是否已从 DataStore 加载完成（非默认空值）
+    val configLoaded = config.smtpHost.isNotEmpty() ||
+            config.senderEmail.isNotEmpty() ||
+            config.recipientEmail.isNotEmpty() ||
+            config.amapWebApiKey.isNotEmpty() ||
+            config.smtpPort != 465 ||
+            config.isGuardingEnabled
+
     // 自动保存：任意字段变化后 800ms 自动持久化
-    LaunchedEffect(Unit) {
-        snapshotFlow {
-            MonitorConfig(
-                smtpHost = smtpHost.trim(),
-                smtpPort = smtpPort.trim().toIntOrNull() ?: 465,
-                senderEmail = senderEmail.trim(),
-                senderPassword = senderPassword.trim(),
-                recipientEmail = recipientEmail.trim(),
-                locationIntervalMinutes = locationInterval.trim().toIntOrNull() ?: 5,
-                emailIntervalMinutes = emailInterval.trim().toIntOrNull() ?: 60,
-                isMonitoringEnabled = config.isMonitoringEnabled,
-                useHighAccuracy = useHighAccuracy,
-                amapWebApiKey = amapWebApiKey.trim()
-            )
-        }
-            .drop(1)
-            .debounce(800)
-            .collectLatest { newConfig ->
-                appConfig.saveConfig(newConfig)
-            }
+    // 使用各字段值作为 key，仅在用户实际编辑后触发
+    LaunchedEffect(
+        smtpHost, smtpPort, senderEmail, senderPassword, recipientEmail,
+        locationInterval, emailInterval, useHighAccuracy, amapWebApiKey
+    ) {
+        // config 未加载完毕时不保存，避免用空值覆盖
+        if (!configLoaded && smtpHost.isBlank() && senderEmail.isBlank()) return@LaunchedEffect
+
+        delay(800)
+        val newConfig = MonitorConfig(
+            smtpHost = smtpHost.trim(),
+            smtpPort = smtpPort.trim().toIntOrNull() ?: 465,
+            senderEmail = senderEmail.trim(),
+            senderPassword = senderPassword.trim(),
+            recipientEmail = recipientEmail.trim(),
+            locationIntervalMinutes = locationInterval.trim().toIntOrNull() ?: 5,
+            emailIntervalMinutes = emailInterval.trim().toIntOrNull() ?: 60,
+            isGuardingEnabled = config.isGuardingEnabled,
+            useHighAccuracy = useHighAccuracy,
+            amapWebApiKey = amapWebApiKey.trim()
+        )
+        appConfig.saveConfig(newConfig)
     }
 
     Column(
@@ -104,15 +127,15 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(4.dp))
 
         SetupSummaryCard(
-            isMonitoring = isMonitoring,
+            isGuarding = isGuarding,
             mailReady = senderEmail.isNotBlank() &&
                     senderPassword.isNotBlank() &&
                     recipientEmail.isNotBlank(),
             mapReady = amapWebApiKey.isNotBlank()
         )
 
-        // 监控开关
-        SettingsSection(title = "监控服务") {
+        // 守护开关
+        SettingsSection(title = "守护服务") {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -122,19 +145,19 @@ fun SettingsScreen(
             ) {
                 Column {
                     Text(
-                        text = "启动监控",
+                        text = "启动守护",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = if (isMonitoring) "短信和位置监控运行中" else "监控已关闭",
+                        text = if (isGuarding) "短信与位置记录运行中" else "守护已关闭",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Switch(
-                    checked = isMonitoring,
-                    onCheckedChange = { onToggleMonitoring(it) },
+                    checked = isGuarding,
+                    onCheckedChange = { onToggleGuarding(it) },
                     colors = SwitchDefaults.colors(
                         checkedTrackColor = Success
                     )
@@ -177,8 +200,8 @@ fun SettingsScreen(
             )
         }
 
-        // 监控配置
-        SettingsSection(title = "监控参数") {
+        // 记录配置
+        SettingsSection(title = "记录参数") {
             SettingsTextField(
                 value = locationInterval,
                 onValueChange = { locationInterval = it },
@@ -244,7 +267,7 @@ fun SettingsScreen(
                     Toast.makeText(context, "正在发送测试邮件…", Toast.LENGTH_SHORT).show()
                     val success = mailSender.sendMail(
                         subject = "[测试] SilentGuard 测试邮件",
-                        body = "这是一封测试邮件，如果您收到说明配置正确。\n\n发送时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}"
+                        body = buildTestMailBody(context, useHighAccuracy)
                     )
                     if (success) {
                         Toast.makeText(context, "测试邮件发送成功", Toast.LENGTH_SHORT).show()
@@ -278,7 +301,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "1.0.0",
+                    text = appVersionName,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -289,13 +312,76 @@ fun SettingsScreen(
     }
 }
 
+private suspend fun buildTestMailBody(context: Context, useHighAccuracy: Boolean): String {
+    val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+    val body = StringBuilder()
+        .appendLine("这是一封测试邮件，如果您收到说明配置正确。")
+        .appendLine()
+        .appendLine("发送时间: ${timeFormat.format(Date())}")
+
+    val hasPermission = ContextCompat.checkSelfPermission(
+        context,
+        android.Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+        context,
+        android.Manifest.permission.ACCESS_COARSE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+
+    if (!hasPermission) {
+        return body.appendLine("当前坐标: 未授予定位权限").toString()
+    }
+
+    val gmsAvailable = try {
+        GoogleApiAvailability.getInstance()
+            .isGooglePlayServicesAvailable(context) == ConnectionResult.SUCCESS
+    } catch (e: Exception) {
+        false
+    }
+
+    if (!gmsAvailable) {
+        return body.appendLine("当前坐标: Google Play Services 不可用，无法获取定位").toString()
+    }
+
+    return try {
+        val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+        val priority = if (useHighAccuracy) {
+            Priority.PRIORITY_HIGH_ACCURACY
+        } else {
+            Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        }
+        var location = withTimeoutOrNull(10_000L) {
+            fusedClient.getCurrentLocation(priority, CancellationTokenSource().token).await()
+        }
+        if (location == null) {
+            location = fusedClient.lastLocation.await()
+        }
+
+        if (location == null) {
+            body.appendLine("当前坐标: 暂未获取到定位结果").toString()
+        } else {
+            val amapLink = "https://uri.amap.com/marker?position=${location.longitude},${location.latitude}&name=测试邮件定位"
+            body
+                .appendLine()
+                .appendLine("当前最新坐标:")
+                .appendLine("经度: ${location.longitude}")
+                .appendLine("纬度: ${location.latitude}")
+                .appendLine("精度: ${location.accuracy}米")
+                .appendLine("定位时间: ${timeFormat.format(Date(location.time))}")
+                .appendLine("高德地图: $amapLink")
+                .toString()
+        }
+    } catch (e: Exception) {
+        body.appendLine("当前坐标: 获取失败（${e.message ?: "未知错误"}）").toString()
+    }
+}
+
 @Composable
 private fun SetupSummaryCard(
-    isMonitoring: Boolean,
+    isGuarding: Boolean,
     mailReady: Boolean,
     mapReady: Boolean
 ) {
-    val readyCount = listOf(isMonitoring, mailReady).count { it }
+    val readyCount = listOf(isGuarding, mailReady).count { it }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -332,14 +418,14 @@ private fun SetupSummaryCard(
             }
 
             SetupSummaryItem(
-                label = "邮件上报",
+                label = "邮件发送",
                 isReady = mailReady,
                 description = if (mailReady) "邮箱、授权码和接收人已填写" else "请填写邮箱并发送测试邮件"
             )
             SetupSummaryItem(
                 label = "守护服务",
-                isReady = isMonitoring,
-                description = if (isMonitoring) "后台守护运行中" else "配置完成后启动守护"
+                isReady = isGuarding,
+                description = if (isGuarding) "后台守护运行中" else "配置完成后启动守护"
             )
             SetupSummaryItem(
                 label = "地图邮件",

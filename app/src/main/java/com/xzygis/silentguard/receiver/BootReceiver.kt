@@ -27,14 +27,14 @@ class BootReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val config = appConfig.configFlow.first()
-                if (config.isMonitoringEnabled) {
+                if (config.isGuardingEnabled) {
                     val serviceIntent = Intent(context, MonitorForegroundService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         context.startForegroundService(serviceIntent)
                     } else {
                         context.startService(serviceIntent)
                     }
-                    Log.i(TAG, "开机自启动监控服务")
+                    Log.i(TAG, "开机自启动守护服务")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "开机启动服务失败: ${e.message}", e)
