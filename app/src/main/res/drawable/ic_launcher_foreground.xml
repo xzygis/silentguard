@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 盾牌外层阴影 -->
+    <path
+        android:fillColor="#004D40"
+        android:pathData="M54,24 L76,34 L76,56 C76,70 66,78 54,84 C42,78 32,70 32,56 L32,34 Z" />
+
+    <!-- 盾牌主体 -->
+    <path
+        android:fillColor="#00897B"
+        android:pathData="M54,26 L74,35 L74,56 C74,69 65,77 54,82 C43,77 34,69 34,56 L34,35 Z" />
+
+    <!-- 盾牌内部 -->
+    <path
+        android:fillColor="#4DB6AC"
+        android:pathData="M54,30 L70,38 L70,56 C70,66 62,73 54,78 C46,73 38,66 38,56 L38,38 Z" />
+
+    <!-- 眼睛白色部分 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,46 C48,46 42,50 40,56 C42,62 48,66 54,66 C60,66 66,62 68,56 C66,50 60,46 54,46 Z" />
+
+    <!-- 虹膜 -->
+    <path
+        android:fillColor="#1A237E"
+        android:pathData="M54,49 A7,7 0 1,1 54,63 A7,7 0 1,1 54,49 Z" />
+
+    <!-- 瞳孔 -->
+    <path
+        android:fillColor="#0D1442"
+        android:pathData="M54,52.5 A3.5,3.5 0 1,1 54,59.5 A3.5,3.5 0 1,1 54,52.5 Z" />
+
+    <!-- 高光点 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M51.5,53 A1.5,1.5 0 1,1 51.5,56 A1.5,1.5 0 1,1 51.5,53 Z" />
+
+    <path
+        android:fillColor="#B2DFDB"
+        android:pathData="M57,57 A0.8,0.8 0 1,1 57,58.6 A0.8,0.8 0 1,1 57,57 Z" />
+</vector>
