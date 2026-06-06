@@ -41,4 +41,7 @@ interface MonitorEventDao {
 
     @Query("SELECT * FROM monitor_events WHERE id = :id")
     suspend fun getEventById(id: Long): MonitorEvent?
+
+    @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND status = 'PENDING' ORDER BY timestamp ASC")
+    suspend fun getPendingLocationEvents(): List<MonitorEvent>
 }

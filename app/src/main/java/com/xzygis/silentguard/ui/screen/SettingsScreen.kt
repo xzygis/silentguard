@@ -61,6 +61,8 @@ fun SettingsScreen(
     var senderPassword by remember(config.senderPassword) { mutableStateOf(config.senderPassword) }
     var recipientEmail by remember(config.recipientEmail) { mutableStateOf(config.recipientEmail) }
     var locationInterval by remember(config.locationIntervalMinutes) { mutableStateOf(config.locationIntervalMinutes.toString()) }
+    var emailInterval by remember(config.emailIntervalMinutes) { mutableStateOf(config.emailIntervalMinutes.toString()) }
+    var useHighAccuracy by remember(config.useHighAccuracy) { mutableStateOf(config.useHighAccuracy) }
 
     Column(
         modifier = Modifier
@@ -143,10 +145,44 @@ fun SettingsScreen(
             SettingsTextField(
                 value = locationInterval,
                 onValueChange = { locationInterval = it },
-                label = "位置上报间隔（分钟）",
-                placeholder = "15",
+                label = "位置记录间隔（分钟）",
+                placeholder = "5",
                 keyboardType = KeyboardType.Number
             )
+            SettingsTextField(
+                value = emailInterval,
+                onValueChange = { emailInterval = it },
+                label = "邮件发送间隔（分钟）",
+                placeholder = "60",
+                keyboardType = KeyboardType.Number
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "高精度定位",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (useHighAccuracy) "使用 GPS，精度高但更耗电" else "使用基站/WiFi，省电但精度较低",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = useHighAccuracy,
+                    onCheckedChange = { useHighAccuracy = it },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = Success
+                    )
+                )
+            }
         }
 
         // 操作
@@ -159,8 +195,10 @@ fun SettingsScreen(
                         senderEmail = senderEmail.trim(),
                         senderPassword = senderPassword.trim(),
                         recipientEmail = recipientEmail.trim(),
-                        locationIntervalMinutes = locationInterval.trim().toIntOrNull() ?: 15,
-                        isMonitoringEnabled = config.isMonitoringEnabled
+                        locationIntervalMinutes = locationInterval.trim().toIntOrNull() ?: 5,
+                        emailIntervalMinutes = emailInterval.trim().toIntOrNull() ?: 60,
+                        isMonitoringEnabled = config.isMonitoringEnabled,
+                        useHighAccuracy = useHighAccuracy
                     )
                     appConfig.saveConfig(newConfig)
                     Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()
