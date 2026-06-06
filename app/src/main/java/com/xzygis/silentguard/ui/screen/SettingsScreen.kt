@@ -47,6 +47,7 @@ import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.config.MonitorConfig
+import com.xzygis.silentguard.location.AmapCoordinateConverter
 import com.xzygis.silentguard.location.AmapReverseGeocoder
 import com.xzygis.silentguard.mail.MailSender
 import com.xzygis.silentguard.ui.theme.*
@@ -370,7 +371,13 @@ private suspend fun buildTestMailBody(
                 latitude = location.latitude,
                 longitude = location.longitude
             )
-            val amapLink = "https://uri.amap.com/marker?position=${location.longitude},${location.latitude}&name=测试邮件定位"
+            val amapLatLng = AmapCoordinateConverter.toAmapLatLng(context, location.latitude, location.longitude)
+            val amapLink = String.format(
+                Locale.US,
+                "https://uri.amap.com/marker?position=%.6f,%.6f&name=测试邮件定位",
+                amapLatLng.longitude,
+                amapLatLng.latitude
+            )
             body
                 .appendLine()
                 .appendLine("当前最新坐标:")

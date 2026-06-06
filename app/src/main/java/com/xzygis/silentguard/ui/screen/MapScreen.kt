@@ -48,7 +48,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.amap.api.maps.AMap
 import com.amap.api.maps.CameraUpdateFactory
-import com.amap.api.maps.CoordinateConverter
 import com.amap.api.maps.model.BitmapDescriptorFactory
 import com.amap.api.maps.model.LatLng
 import com.amap.api.maps.model.Marker
@@ -62,6 +61,7 @@ import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
 import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.data.MonitorEventDao
+import com.xzygis.silentguard.location.AmapCoordinateConverter
 import com.xzygis.silentguard.location.AmapReverseGeocoder
 import com.xzygis.silentguard.ui.component.AMapView
 import com.xzygis.silentguard.ui.theme.*
@@ -192,17 +192,7 @@ private fun createTrackInfoWindow(context: Context, marker: Marker): View {
 private fun MonitorEvent.toAmapLatLng(context: Context): LatLng? {
     val latitude = latitude ?: return null
     val longitude = longitude ?: return null
-    val gpsLatLng = LatLng(latitude, longitude)
-
-    return try {
-        CoordinateConverter(context).apply {
-            from(CoordinateConverter.CoordType.GPS)
-            coord(gpsLatLng)
-        }.convert()
-    } catch (e: Exception) {
-        Log.w("MapScreen", "GPS 坐标转换高德坐标失败，使用原始坐标: ${e.message}")
-        gpsLatLng
-    }
+    return AmapCoordinateConverter.toAmapLatLng(context, latitude, longitude)
 }
 
 private fun renderTrackOnMap(

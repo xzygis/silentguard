@@ -12,6 +12,7 @@ import androidx.work.WorkerParameters
 import com.xzygis.silentguard.data.AppDatabase
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.config.AppConfig
+import com.xzygis.silentguard.location.AmapCoordinateConverter
 import com.xzygis.silentguard.location.AmapReverseGeocoder
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -59,7 +60,7 @@ class EmailScheduleWorker(
             val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             val appConfig = AppConfig(applicationContext)
             val config = appConfig.getConfig()
-            val mapUrl = StaticMapUrlBuilder.buildUrl(pendingEvents, config.amapWebApiKey)
+            val mapUrl = StaticMapUrlBuilder.buildUrl(applicationContext, pendingEvents, config.amapWebApiKey)
             val addressByEventId = pendingEvents.associate { event ->
                 val existingAddress = AmapReverseGeocoder.extractAddress(event.detail)
                 val resolvedAddress = if (existingAddress == null && event.latitude != null && event.longitude != null) {
@@ -91,10 +92,23 @@ class EmailScheduleWorker(
                     pendingEvents.forEachIndexed { index, event ->
                         val bgColor = if (index % 2 == 0) "#fff" else "#f9f9f9"
                         val time = timeFormat.format(Date(event.timestamp))
-                        val coord = "%.4f, %.4f".format(event.latitude, event.longitude)
+                        val amapLatLng = if (event.latitude != null && event.longitude != null) {
+                            AmapCoordinateConverter.toAmapLatLng(applicationContext, event.latitude, event.longitude)
+                        } else {
+                            null
+                        }
+                        val coord = amapLatLng?.let { "%.4f, %.4f".format(Locale.US, it.latitude, it.longitude) } ?: "-"
                         val address = addressByEventId[event.id]?.let { escapeHtml(it) } ?: "-"
                         val accuracy = event.accuracy?.let { "%.0f米".format(it) } ?: "-"
-                        val amapLink = "https://uri.amap.com/marker?position=${event.longitude},${event.latitude}&name=位置${index + 1}"
+                        val amapLink = amapLatLng?.let {
+                            String.format(
+                                Locale.US,
+                                "https://uri.amap.com/marker?position=%.6f,%.6f&name=位置%d",
+                                it.longitude,
+                                it.latitude,
+                                index + 1
+                            )
+                        } ?: "#"
                         appendLine("<tr style=\"background:$bgColor;\">")
                         appendLine("<td style=\"padding:6px 8px;\">${index + 1}</td>")
                         appendLine("<td style=\"padding:6px 8px;\">$time</td>")

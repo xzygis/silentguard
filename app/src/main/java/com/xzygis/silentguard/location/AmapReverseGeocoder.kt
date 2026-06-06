@@ -2,8 +2,6 @@ package com.xzygis.silentguard.location
 
 import android.content.Context
 import android.util.Log
-import com.amap.api.maps.CoordinateConverter
-import com.amap.api.maps.model.LatLng
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -27,7 +25,7 @@ object AmapReverseGeocoder {
 
         return withContext(Dispatchers.IO) {
             try {
-                val amapLatLng = toAmapLatLng(context, latitude, longitude)
+                val amapLatLng = AmapCoordinateConverter.toAmapLatLng(context, latitude, longitude)
                 val encodedKey = URLEncoder.encode(apiKey, "UTF-8")
                 val location = String.format(
                     Locale.US,
@@ -69,18 +67,5 @@ object AmapReverseGeocoder {
 
     fun formatSummary(address: String?, latitude: Double, longitude: Double): String {
         return address ?: "%.4f, %.4f".format(latitude, longitude)
-    }
-
-    private fun toAmapLatLng(context: Context, latitude: Double, longitude: Double): LatLng {
-        val gpsLatLng = LatLng(latitude, longitude)
-        return try {
-            CoordinateConverter(context.applicationContext).apply {
-                from(CoordinateConverter.CoordType.GPS)
-                coord(gpsLatLng)
-            }.convert()
-        } catch (e: Exception) {
-            Log.w(TAG, "坐标转换失败，使用原始坐标: ${e.message}")
-            gpsLatLng
-        }
     }
 }
