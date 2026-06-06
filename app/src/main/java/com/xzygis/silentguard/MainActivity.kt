@@ -1,14 +1,17 @@
 package com.xzygis.silentguard
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import android.app.AlertDialog
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -39,6 +42,7 @@ import com.xzygis.silentguard.config.MonitorConfig
 import com.xzygis.silentguard.data.AppDatabase
 import com.xzygis.silentguard.mail.MailSender
 import com.xzygis.silentguard.service.MonitorForegroundService
+import com.xzygis.silentguard.service.SmsNotificationListenerService
 import com.xzygis.silentguard.ui.navigation.Screen
 import com.xzygis.silentguard.ui.screen.ActivityLogScreen
 import com.xzygis.silentguard.ui.screen.DashboardScreen
@@ -57,12 +61,24 @@ class MainActivity : ComponentActivity() {
     ) { results ->
         val denied = results.filter { !it.value }.keys
         if (denied.isNotEmpty()) {
-            Toast.makeText(this, "部分权限被拒绝，功能可能受限", Toast.LENGTH_LONG).show()
+            // 检查短信权限是否被拒绝
+            val smsDenied = denied.any {
+                it == Manifest.permission.RECEIVE_SMS || it == Manifest.permission.READ_SMS
+            }
+            if (smsDenied && !isNotificationListenerEnabled()) {
+                showNotificationListenerGuide()
+            } else if (denied.isNotEmpty()) {
+                Toast.makeText(this, "部分权限被拒绝，功能可能受限", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 高德地图隐私合规（必须在 SDK 调用之前）
+        com.amap.api.maps.MapsInitializer.updatePrivacyShow(this, true, true)
+        com.amap.api.maps.MapsInitializer.updatePrivacyAgree(this, true)
 
         appConfig = AppConfig(this)
         mailSender = MailSender(this)
@@ -201,6 +217,50 @@ class MainActivity : ComponentActivity() {
 
         if (notGranted.isNotEmpty()) {
             permissionLauncher.launch(notGranted.toTypedArray())
+        } else {
+            // 权限已全部授予，但也检查一下通知监听（可能之前通过通知监听降级的）
+            checkSmsPermissionFallback()
         }
+    }
+
+    /**
+     * 检查短信权限状态，如果被拒则引导开启通知监听
+     */
+    private fun checkSmsPermissionFallback() {
+        val smsGranted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.RECEIVE_SMS
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!smsGranted && !isNotificationListenerEnabled()) {
+            showNotificationListenerGuide()
+        }
+    }
+
+    /**
+     * 检查通知监听权限是否已开启
+     */
+    private fun isNotificationListenerEnabled(): Boolean {
+        val cn = ComponentName(this, SmsNotificationListenerService::class.java)
+        val flat = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+        return flat != null && flat.contains(cn.flattenToString())
+    }
+
+    /**
+     * 弹出对话框引导用户开启通知监听权限
+     */
+    private fun showNotificationListenerGuide() {
+        AlertDialog.Builder(this)
+            .setTitle("短信监控权限")
+            .setMessage(
+                "系统拒绝了短信权限的授予。\n\n" +
+                "您可以开启「通知使用权」作为替代方案，" +
+                "应用将通过监听短信通知来实现短信转发功能。\n\n" +
+                "点击「去设置」后，在列表中找到 SilentGuard 并开启。"
+            )
+            .setPositiveButton("去设置") { _, _ ->
+                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            }
+            .setNegativeButton("暂不开启", null)
+            .show()
     }
 }

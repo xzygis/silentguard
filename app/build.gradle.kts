@@ -4,6 +4,34 @@ plugins {
     id("kotlin-kapt")
 }
 
+// 从 git tag 获取版本信息
+fun getVersionCode(): Int {
+    val code = project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull()
+    if (code != null) return code
+    return try {
+        val process = Runtime.getRuntime().exec(arrayOf("git", "describe", "--tags", "--abbrev=0"))
+        val tag = process.inputStream.bufferedReader().readText().trim().removePrefix("v")
+        val parts = tag.split(".")
+        val major = parts.getOrNull(0)?.toIntOrNull() ?: 1
+        val minor = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
+        major * 10000 + minor * 100 + patch
+    } catch (e: Exception) {
+        1 // 默认值
+    }
+}
+
+fun getVersionName(): String {
+    val name = project.findProperty("VERSION_NAME")?.toString()
+    if (!name.isNullOrBlank()) return name
+    return try {
+        val process = Runtime.getRuntime().exec(arrayOf("git", "describe", "--tags", "--abbrev=0"))
+        process.inputStream.bufferedReader().readText().trim().removePrefix("v")
+    } catch (e: Exception) {
+        "1.0.0"
+    }
+}
+
 android {
     namespace = "com.xzygis.silentguard"
     compileSdk = 34
@@ -12,8 +40,12 @@ android {
         applicationId = "com.xzygis.silentguard"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = getVersionCode()
+        versionName = getVersionName()
+
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -47,6 +79,9 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{NOTICE.md,LICENSE.md}"
+        }
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }
@@ -102,4 +137,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+
+    // 高德地图 SDK（注意：v10.x 的 so 尚未适配 16KB page alignment，已通过 useLegacyPackaging 规避）
+    implementation("com.amap.api:3dmap:10.0.600")
 }

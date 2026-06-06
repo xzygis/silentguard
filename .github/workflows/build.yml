@@ -52,7 +52,14 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: |
+          VERSION=${{ steps.version.outputs.TAG }}
+          VERSION_NUM=${VERSION#v}
+          MAJOR=$(echo "$VERSION_NUM" | cut -d. -f1)
+          MINOR=$(echo "$VERSION_NUM" | cut -d. -f2)
+          PATCH=$(echo "$VERSION_NUM" | cut -d. -f3)
+          CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          ./gradlew assembleDebug -PVERSION_CODE=$CODE -PVERSION_NAME=$VERSION_NUM
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
