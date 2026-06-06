@@ -37,9 +37,17 @@ class MailSender(private val context: Context) {
                     put("mail.smtp.host", config.smtpHost)
                     put("mail.smtp.port", config.smtpPort.toString())
                     put("mail.smtp.auth", "true")
-                    put("mail.smtp.ssl.enable", "true")
-                    put("mail.smtp.socketFactory.class", "javax.net.ssl.SSLSocketFactory")
-                    put("mail.smtp.socketFactory.port", config.smtpPort.toString())
+
+                    if (config.smtpPort == 587) {
+                        // STARTTLS（Outlook 等）
+                        put("mail.smtp.starttls.enable", "true")
+                        put("mail.smtp.starttls.required", "true")
+                    } else {
+                        // SSL（QQ、163、Gmail、飞书等，端口 465）
+                        put("mail.smtp.ssl.enable", "true")
+                        put("mail.smtp.socketFactory.class", "javax.net.ssl.SSLSocketFactory")
+                        put("mail.smtp.socketFactory.port", config.smtpPort.toString())
+                    }
                 }
 
                 val session = Session.getInstance(properties, object : Authenticator() {

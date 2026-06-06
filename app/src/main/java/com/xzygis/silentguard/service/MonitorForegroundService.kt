@@ -22,6 +22,10 @@ import com.google.android.gms.location.Priority
 import com.xzygis.silentguard.MainActivity
 import com.xzygis.silentguard.R
 import com.xzygis.silentguard.config.AppConfig
+import com.xzygis.silentguard.data.AppDatabase
+import com.xzygis.silentguard.data.EventStatus
+import com.xzygis.silentguard.data.EventType
+import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.mail.MailWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -127,7 +131,27 @@ class MonitorForegroundService : Service() {
                         appendLine("Google Maps: $mapsLink")
                     }
 
-                    MailWorker.enqueue(this@MonitorForegroundService, subject, body)
+                    // 记录到数据库
+                    val event = MonitorEvent(
+                        type = EventType.LOCATION,
+                        title = "位置上报",
+                        summary = "%.4f, %.4f".format(location.latitude, location.longitude),
+                        detail = body,
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        accuracy = location.accuracy,
+                        status = EventStatus.PENDING
+                    )
+                    serviceScope.launch {
+                        try {
+                            val dao = AppDatabase.getInstance(this@MonitorForegroundService).monitorEventDao()
+                            val eventId = dao.insert(event)
+                            MailWorker.enqueue(this@MonitorForegroundService, subject, body)
+                            dao.updateStatus(eventId, EventStatus.SENT)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "记录位置事件失败: ${e.message}", e)
+                        }
+                    }
                 }
             }
 

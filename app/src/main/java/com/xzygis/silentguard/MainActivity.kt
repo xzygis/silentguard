@@ -9,46 +9,41 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.navigation.NavDestination.Companion.hierarchy
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.config.MonitorConfig
+import com.xzygis.silentguard.data.AppDatabase
 import com.xzygis.silentguard.mail.MailSender
 import com.xzygis.silentguard.service.MonitorForegroundService
+import com.xzygis.silentguard.ui.navigation.Screen
+import com.xzygis.silentguard.ui.screen.ActivityLogScreen
+import com.xzygis.silentguard.ui.screen.DashboardScreen
+import com.xzygis.silentguard.ui.screen.MapScreen
+import com.xzygis.silentguard.ui.screen.SettingsScreen
+import com.xzygis.silentguard.ui.theme.SilentGuardTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -74,183 +69,95 @@ class MainActivity : ComponentActivity() {
         requestPermissions()
 
         setContent {
-            MaterialTheme {
-                MonitorApp()
+            SilentGuardTheme {
+                SilentGuardApp()
             }
         }
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
-    private fun MonitorApp() {
+    private fun SilentGuardApp() {
+        val navController = rememberNavController()
         val config by appConfig.configFlow.collectAsState(initial = MonitorConfig())
         val scope = rememberCoroutineScope()
-
-        var smtpHost by remember(config.smtpHost) { mutableStateOf(config.smtpHost) }
-        var smtpPort by remember(config.smtpPort) { mutableStateOf(config.smtpPort.toString()) }
-        var senderEmail by remember(config.senderEmail) { mutableStateOf(config.senderEmail) }
-        var senderPassword by remember(config.senderPassword) { mutableStateOf(config.senderPassword) }
-        var recipientEmail by remember(config.recipientEmail) { mutableStateOf(config.recipientEmail) }
-        var locationInterval by remember(config.locationIntervalMinutes) { mutableStateOf(config.locationIntervalMinutes.toString()) }
-        var isMonitoring by remember(config.isMonitoringEnabled) { mutableStateOf(config.isMonitoringEnabled) }
+        val dao = remember { AppDatabase.getInstance(this@MainActivity).monitorEventDao() }
 
         Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text("SilentGuard") },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                )
+            bottomBar = {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 0.dp
+                ) {
+                    val navBackStackEntry by navController.currentBackStackEntryAsState()
+                    val currentDestination = navBackStackEntry?.destination
+
+                    Screen.items.forEach { screen ->
+                        val selected = currentDestination?.hierarchy?.any {
+                            it.route == screen.route
+                        } == true
+
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = {
+                                navController.navigate(screen.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            icon = {
+                                Icon(
+                                    imageVector = if (selected) screen.selectedIcon else screen.unselectedIcon,
+                                    contentDescription = screen.label
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = screen.label,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        )
+                    }
+                }
             }
         ) { innerPadding ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(16.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            NavHost(
+                navController = navController,
+                startDestination = Screen.Dashboard.route,
+                modifier = Modifier.padding(innerPadding),
+                enterTransition = { fadeIn(animationSpec = tween(200)) },
+                exitTransition = { fadeOut(animationSpec = tween(200)) }
             ) {
-                // SMTP 配置卡片
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("邮件配置", style = MaterialTheme.typography.titleMedium)
-
-                        OutlinedTextField(
-                            value = smtpHost,
-                            onValueChange = { smtpHost = it },
-                            label = { Text("SMTP 服务器") },
-                            placeholder = { Text("smtp.feishu.cn") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
-
-                        OutlinedTextField(
-                            value = smtpPort,
-                            onValueChange = { smtpPort = it },
-                            label = { Text("SMTP 端口") },
-                            placeholder = { Text("465") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-
-                        OutlinedTextField(
-                            value = senderEmail,
-                            onValueChange = { senderEmail = it },
-                            label = { Text("发送邮箱") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
-                        )
-
-                        OutlinedTextField(
-                            value = senderPassword,
-                            onValueChange = { senderPassword = it },
-                            label = { Text("邮箱授权码") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation()
-                        )
-
-                        OutlinedTextField(
-                            value = recipientEmail,
-                            onValueChange = { recipientEmail = it },
-                            label = { Text("接收邮箱") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
-                        )
-                    }
+                composable(Screen.Dashboard.route) {
+                    DashboardScreen(
+                        isMonitoring = config.isMonitoringEnabled,
+                        dao = dao,
+                        onToggleMonitoring = { toggleMonitoring(it) }
+                    )
                 }
-
-                // 监控配置卡片
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("监控配置", style = MaterialTheme.typography.titleMedium)
-
-                        OutlinedTextField(
-                            value = locationInterval,
-                            onValueChange = { locationInterval = it },
-                            label = { Text("位置上报间隔 (分钟)") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("启动监控", style = MaterialTheme.typography.bodyLarge)
-                            Switch(
-                                checked = isMonitoring,
-                                onCheckedChange = { enabled ->
-                                    isMonitoring = enabled
-                                    toggleMonitoring(enabled)
-                                }
-                            )
-                        }
-                    }
+                composable(Screen.ActivityLog.route) {
+                    ActivityLogScreen(dao = dao)
                 }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 操作按钮
-                Button(
-                    onClick = {
-                        scope.launch {
-                            val newConfig = MonitorConfig(
-                                smtpHost = smtpHost.trim(),
-                                smtpPort = smtpPort.trim().toIntOrNull() ?: 465,
-                                senderEmail = senderEmail.trim(),
-                                senderPassword = senderPassword.trim(),
-                                recipientEmail = recipientEmail.trim(),
-                                locationIntervalMinutes = locationInterval.trim().toIntOrNull() ?: 15,
-                                isMonitoringEnabled = isMonitoring
-                            )
-                            appConfig.saveConfig(newConfig)
-                            Toast.makeText(this@MainActivity, "配置已保存", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("保存配置")
+                composable(Screen.Map.route) {
+                    MapScreen(dao = dao)
                 }
-
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            Toast.makeText(this@MainActivity, "正在发送测试邮件...", Toast.LENGTH_SHORT).show()
-                            val success = mailSender.sendMail(
-                                subject = "[测试] SilentGuard 测试邮件",
-                                body = "这是一封测试邮件，如果您收到此邮件说明配置正确。"
-                            )
-                            if (success) {
-                                Toast.makeText(this@MainActivity, "测试邮件发送成功", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(this@MainActivity, "邮件发送失败，请检查配置和网络", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("发送测试邮件")
+                composable(Screen.Settings.route) {
+                    SettingsScreen(
+                        appConfig = appConfig,
+                        mailSender = mailSender,
+                        isMonitoring = config.isMonitoringEnabled,
+                        onToggleMonitoring = { toggleMonitoring(it) }
+                    )
                 }
             }
         }
