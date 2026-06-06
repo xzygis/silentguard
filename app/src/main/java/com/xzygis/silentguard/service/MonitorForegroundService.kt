@@ -44,8 +44,8 @@ import java.util.Locale
 class MonitorForegroundService : Service() {
 
     companion object {
-        private const val TAG = "MonitorService"
-        private const val CHANNEL_ID = "monitor_channel"
+        private const val TAG = "GuardService"
+        private const val CHANNEL_ID = "guard_channel"
         private const val NOTIFICATION_ID = 1
         private const val NIGHT_START_HOUR = 23
         private const val NIGHT_END_HOUR = 6
@@ -89,10 +89,10 @@ class MonitorForegroundService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "手机监控服务",
+                "SilentGuard 守护服务",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "手机监控前台服务通知"
+                description = "SilentGuard 前台守护服务通知"
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
@@ -108,8 +108,8 @@ class MonitorForegroundService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("手机监控运行中")
-            .setContentText("正在监控短信和位置信息")
+            .setContentTitle("SilentGuard 守护运行中")
+            .setContentText("正在按配置记录短信与位置")
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -125,7 +125,7 @@ class MonitorForegroundService : Service() {
         serviceScope.launch {
             val config = appConfig.configFlow.first()
             requestLocationWithConfig(config.locationIntervalMinutes, config.useHighAccuracy)
-            monitorDayNightSwitch(config.locationIntervalMinutes, config.useHighAccuracy)
+            observeDayNightSwitch(config.locationIntervalMinutes, config.useHighAccuracy)
         }
     }
 
@@ -178,7 +178,7 @@ class MonitorForegroundService : Service() {
 
                 val event = MonitorEvent(
                     type = EventType.LOCATION,
-                    title = "位置上报",
+                    title = "位置记录",
                     summary = "%.4f, %.4f".format(location.latitude, location.longitude),
                     detail = body,
                     latitude = location.latitude,
@@ -217,7 +217,7 @@ class MonitorForegroundService : Service() {
         }
     }
 
-    private fun monitorDayNightSwitch(baseIntervalMinutes: Int, useHighAccuracy: Boolean) {
+    private fun observeDayNightSwitch(baseIntervalMinutes: Int, useHighAccuracy: Boolean) {
         serviceScope.launch {
             var wasNight = isNightTime()
             while (isActive) {

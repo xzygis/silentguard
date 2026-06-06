@@ -25,7 +25,7 @@ data class MonitorConfig(
     val recipientEmail: String = "",
     val locationIntervalMinutes: Int = 5,
     val emailIntervalMinutes: Int = 60,
-    val isMonitoringEnabled: Boolean = false,
+    val isGuardingEnabled: Boolean = false,
     val useHighAccuracy: Boolean = false,
     val amapWebApiKey: String = ""
 )
@@ -39,9 +39,8 @@ class AppConfig(private val context: Context) {
         val RECIPIENT_EMAIL = stringPreferencesKey("recipient_email")
         val LOCATION_INTERVAL = intPreferencesKey("location_interval_minutes")
         val EMAIL_INTERVAL = intPreferencesKey("email_interval_minutes")
-        val IS_MONITORING_ENABLED = booleanPreferencesKey("is_monitoring_enabled")
+        val IS_GUARDING_ENABLED = booleanPreferencesKey("is_monitoring_enabled")
         val USE_HIGH_ACCURACY = booleanPreferencesKey("use_high_accuracy")
-        val AMAP_WEB_API_KEY = stringPreferencesKey("amap_web_api_key")
     }
 
     private val encryptedPrefs: SharedPreferences by lazy {
@@ -64,9 +63,9 @@ class AppConfig(private val context: Context) {
             recipientEmail = prefs[Keys.RECIPIENT_EMAIL] ?: "",
             locationIntervalMinutes = prefs[Keys.LOCATION_INTERVAL] ?: 5,
             emailIntervalMinutes = prefs[Keys.EMAIL_INTERVAL] ?: 60,
-            isMonitoringEnabled = prefs[Keys.IS_MONITORING_ENABLED] ?: false,
+            isGuardingEnabled = prefs[Keys.IS_GUARDING_ENABLED] ?: false,
             useHighAccuracy = prefs[Keys.USE_HIGH_ACCURACY] ?: false,
-            amapWebApiKey = prefs[Keys.AMAP_WEB_API_KEY] ?: ""
+            amapWebApiKey = encryptedPrefs.getString("amap_web_api_key", "") ?: ""
         )
     }
 
@@ -75,8 +74,11 @@ class AppConfig(private val context: Context) {
     }
 
     suspend fun saveConfig(config: MonitorConfig) {
-        // 密码加密存储
-        encryptedPrefs.edit().putString("sender_password", config.senderPassword).apply()
+        // 敏感数据加密存储
+        encryptedPrefs.edit()
+            .putString("sender_password", config.senderPassword)
+            .putString("amap_web_api_key", config.amapWebApiKey)
+            .apply()
 
         // 其他配置存 DataStore
         context.dataStore.edit { prefs ->
@@ -86,15 +88,14 @@ class AppConfig(private val context: Context) {
             prefs[Keys.RECIPIENT_EMAIL] = config.recipientEmail
             prefs[Keys.LOCATION_INTERVAL] = config.locationIntervalMinutes
             prefs[Keys.EMAIL_INTERVAL] = config.emailIntervalMinutes
-            prefs[Keys.IS_MONITORING_ENABLED] = config.isMonitoringEnabled
+            prefs[Keys.IS_GUARDING_ENABLED] = config.isGuardingEnabled
             prefs[Keys.USE_HIGH_ACCURACY] = config.useHighAccuracy
-            prefs[Keys.AMAP_WEB_API_KEY] = config.amapWebApiKey
         }
     }
 
-    suspend fun setMonitoringEnabled(enabled: Boolean) {
+    suspend fun setGuardingEnabled(enabled: Boolean) {
         context.dataStore.edit { prefs ->
-            prefs[Keys.IS_MONITORING_ENABLED] = enabled
+            prefs[Keys.IS_GUARDING_ENABLED] = enabled
         }
     }
 }

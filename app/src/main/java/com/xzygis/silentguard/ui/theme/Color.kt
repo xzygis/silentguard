@@ -7,10 +7,10 @@ val Primary = Color(0xFF1A1B2E)
 val PrimaryVariant = Color(0xFF2D2F4E)
 val OnPrimary = Color(0xFFFFFFFF)
 
-// 强调色 - 冷蓝色，科技感
-val Accent = Color(0xFF6C63FF)
-val AccentLight = Color(0xFF8B85FF)
-val AccentSurface = Color(0x1A6C63FF)
+// 强调色 - 青绿色，贴合守护与安全语义
+val Accent = Color(0xFF0F9F7A)
+val AccentLight = Color(0xFF34D399)
+val AccentSurface = Color(0x1A0F9F7A)
 
 // 功能色
 val Success = Color(0xFF34D399)
@@ -41,5 +41,5 @@ val DarkDivider = Color(0xFF2D3040)
 // 事件类型色
 val SmsColor = Color(0xFF3B82F6)
 val SmsSurface = Color(0x1A3B82F6)
-val LocationColor = Color(0xFF10B981)
-val LocationSurface = Color(0x1A10B981)
+val LocationColor = Color(0xFF0F9F7A)
+val LocationSurface = Color(0x1A0F9F7A)
