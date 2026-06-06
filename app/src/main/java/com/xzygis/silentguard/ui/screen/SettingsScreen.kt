@@ -47,6 +47,7 @@ import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.config.MonitorConfig
+import com.xzygis.silentguard.location.AmapReverseGeocoder
 import com.xzygis.silentguard.mail.MailSender
 import com.xzygis.silentguard.ui.theme.*
 import kotlinx.coroutines.delay
@@ -267,7 +268,7 @@ fun SettingsScreen(
                     Toast.makeText(context, "正在发送测试邮件…", Toast.LENGTH_SHORT).show()
                     val success = mailSender.sendMail(
                         subject = "[测试] SilentGuard 测试邮件",
-                        body = buildTestMailBody(context, useHighAccuracy)
+                        body = buildTestMailBody(context, useHighAccuracy, amapWebApiKey.trim())
                     )
                     if (success) {
                         Toast.makeText(context, "测试邮件发送成功", Toast.LENGTH_SHORT).show()
@@ -312,7 +313,11 @@ fun SettingsScreen(
     }
 }
 
-private suspend fun buildTestMailBody(context: Context, useHighAccuracy: Boolean): String {
+private suspend fun buildTestMailBody(
+    context: Context,
+    useHighAccuracy: Boolean,
+    amapWebApiKey: String
+): String {
     val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     val body = StringBuilder()
         .appendLine("这是一封测试邮件，如果您收到说明配置正确。")
@@ -359,10 +364,19 @@ private suspend fun buildTestMailBody(context: Context, useHighAccuracy: Boolean
         if (location == null) {
             body.appendLine("当前坐标: 暂未获取到定位结果").toString()
         } else {
+            val address = AmapReverseGeocoder.resolveAddress(
+                context = context,
+                apiKey = amapWebApiKey,
+                latitude = location.latitude,
+                longitude = location.longitude
+            )
             val amapLink = "https://uri.amap.com/marker?position=${location.longitude},${location.latitude}&name=测试邮件定位"
             body
                 .appendLine()
                 .appendLine("当前最新坐标:")
+                .apply {
+                    if (address != null) appendLine("地址: $address")
+                }
                 .appendLine("经度: ${location.longitude}")
                 .appendLine("纬度: ${location.latitude}")
                 .appendLine("精度: ${location.accuracy}米")

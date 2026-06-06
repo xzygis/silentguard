@@ -3,6 +3,9 @@ package com.xzygis.silentguard.mail
 import android.content.Context
 import android.util.Log
 import com.xzygis.silentguard.config.AppConfig
+import com.xzygis.silentguard.data.AppDatabase
+import com.xzygis.silentguard.data.MailSendRecord
+import com.xzygis.silentguard.data.MailSendStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -30,6 +33,12 @@ class MailSender(private val context: Context) {
 
                 if (config.senderEmail.isBlank() || config.senderPassword.isBlank() || config.recipientEmail.isBlank()) {
                     Log.w(TAG, "邮件配置不完整，跳过发送")
+                    recordMailResult(
+                        subject = subject,
+                        recipient = config.recipientEmail,
+                        status = MailSendStatus.FAILED,
+                        errorMessage = "邮件配置不完整"
+                    )
                     return@withContext false
                 }
 
@@ -70,11 +79,42 @@ class MailSender(private val context: Context) {
 
                 Transport.send(message)
                 Log.i(TAG, "邮件发送成功: $subject")
+                recordMailResult(
+                    subject = subject,
+                    recipient = config.recipientEmail,
+                    status = MailSendStatus.SENT
+                )
                 return@withContext true
             } catch (e: Exception) {
                 Log.e(TAG, "邮件发送失败: ${e.message}", e)
+                recordMailResult(
+                    subject = subject,
+                    recipient = runCatching { appConfig.configFlow.first().recipientEmail }.getOrDefault(""),
+                    status = MailSendStatus.FAILED,
+                    errorMessage = e.message.orEmpty()
+                )
                 return@withContext false
             }
+        }
+    }
+
+    private suspend fun recordMailResult(
+        subject: String,
+        recipient: String,
+        status: MailSendStatus,
+        errorMessage: String = ""
+    ) {
+        runCatching {
+            AppDatabase.getInstance(context).mailSendRecordDao().insert(
+                MailSendRecord(
+                    subject = subject,
+                    recipient = recipient,
+                    status = status,
+                    errorMessage = errorMessage
+                )
+            )
+        }.onFailure { e ->
+            Log.w(TAG, "邮件发送记录写入失败: ${e.message}")
         }
     }
 }

@@ -27,6 +27,7 @@ import com.xzygis.silentguard.data.AppDatabase
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
 import com.xzygis.silentguard.data.MonitorEvent
+import com.xzygis.silentguard.location.AmapReverseGeocoder
 import com.xzygis.silentguard.mail.EmailScheduleWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -164,30 +165,42 @@ class MonitorForegroundService : Service() {
                     }
                 }
 
-                val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                val currentTime = timeFormat.format(Date())
-                val mapsLink = "https://maps.google.com/maps?q=${location.latitude},${location.longitude}"
-
-                val body = buildString {
-                    appendLine("经度: ${location.longitude}")
-                    appendLine("纬度: ${location.latitude}")
-                    appendLine("精度: ${location.accuracy}米")
-                    appendLine("时间: $currentTime")
-                    appendLine("Google Maps: $mapsLink")
-                }
-
-                val event = MonitorEvent(
-                    type = EventType.LOCATION,
-                    title = "位置记录",
-                    summary = "%.4f, %.4f".format(location.latitude, location.longitude),
-                    detail = body,
-                    latitude = location.latitude,
-                    longitude = location.longitude,
-                    accuracy = location.accuracy,
-                    status = EventStatus.PENDING
-                )
                 serviceScope.launch {
                     try {
+                        val config = appConfig.getConfig()
+                        val address = AmapReverseGeocoder.resolveAddress(
+                            context = this@MonitorForegroundService,
+                            apiKey = config.amapWebApiKey,
+                            latitude = location.latitude,
+                            longitude = location.longitude
+                        )
+                        val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                        val currentTime = timeFormat.format(Date())
+                        val mapsLink = "https://maps.google.com/maps?q=${location.latitude},${location.longitude}"
+
+                        val body = buildString {
+                            if (address != null) appendLine("地址: $address")
+                            appendLine("经度: ${location.longitude}")
+                            appendLine("纬度: ${location.latitude}")
+                            appendLine("精度: ${location.accuracy}米")
+                            appendLine("时间: $currentTime")
+                            appendLine("Google Maps: $mapsLink")
+                        }
+
+                        val event = MonitorEvent(
+                            type = EventType.LOCATION,
+                            title = "位置记录",
+                            summary = AmapReverseGeocoder.formatSummary(
+                                address,
+                                location.latitude,
+                                location.longitude
+                            ),
+                            detail = body,
+                            latitude = location.latitude,
+                            longitude = location.longitude,
+                            accuracy = location.accuracy,
+                            status = EventStatus.PENDING
+                        )
                         val dao = AppDatabase.getInstance(this@MonitorForegroundService).monitorEventDao()
                         dao.insert(event)
                         lastRecordedLocation = location

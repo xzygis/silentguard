@@ -1,15 +1,17 @@
 package com.xzygis.silentguard.ui.screen
 
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.GradientDrawable
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
-import android.net.Uri
 import android.os.Looper
 import android.util.Log
 import android.view.View
@@ -55,10 +57,12 @@ import com.amap.api.maps.model.PolylineOptions
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
+import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
 import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.data.MonitorEventDao
+import com.xzygis.silentguard.location.AmapReverseGeocoder
 import com.xzygis.silentguard.ui.component.AMapView
 import com.xzygis.silentguard.ui.theme.*
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -78,7 +82,11 @@ private enum class TimeRange(val label: String, val hours: Int) {
 private data class TrackMarkerInfo(
     val title: String,
     val status: String,
-    val action: String
+    val statusColor: Int,
+    val time: String,
+    val address: String?,
+    val coordinate: String,
+    val accuracy: String
 )
 
 private const val LOCATION_DEDUP_DISTANCE_METERS = 100f
@@ -87,11 +95,61 @@ private fun Context.px(value: Int): Int {
     return (value * resources.displayMetrics.density).toInt()
 }
 
+private fun createNumberedMarkerIcon(
+    context: Context,
+    number: Int,
+    status: EventStatus
+) = BitmapDescriptorFactory.fromBitmap(
+    Bitmap.createBitmap(context.px(38), context.px(38), Bitmap.Config.ARGB_8888).apply {
+        val canvas = Canvas(this)
+        val fillColor = when (status) {
+            EventStatus.SENT -> AndroidColor.parseColor("#0F9F7A")
+            EventStatus.FAILED -> AndroidColor.parseColor("#DC2626")
+            EventStatus.PENDING -> AndroidColor.parseColor("#F59E0B")
+        }
+        val strokeWidth = context.px(2).toFloat()
+        val bounds = RectF(
+            strokeWidth,
+            strokeWidth,
+            width - strokeWidth,
+            height - strokeWidth
+        )
+
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = fillColor
+            style = Paint.Style.FILL
+        }
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = AndroidColor.WHITE
+            style = Paint.Style.STROKE
+            this.strokeWidth = strokeWidth
+        }
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = AndroidColor.WHITE
+            textAlign = Paint.Align.CENTER
+            textSize = context.px(if (number < 100) 15 else 11).toFloat()
+            typeface = Typeface.DEFAULT_BOLD
+        }
+
+        canvas.drawOval(bounds, fillPaint)
+        canvas.drawOval(bounds, strokePaint)
+
+        val label = if (number > 99) "99+" else number.toString()
+        val textY = height / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
+        canvas.drawText(label, width / 2f, textY, textPaint)
+    }
+)
+
 private fun createTrackInfoWindow(context: Context, marker: Marker): View {
     val info = marker.`object` as? TrackMarkerInfo
     val titleText = info?.title ?: marker.title.orEmpty()
     val statusText = info?.status ?: marker.snippet.orEmpty()
-    val actionText = info?.action ?: "点击卡片在地图中打开"
+    val detailLines = listOfNotNull(
+        info?.time,
+        info?.address?.let { "地址: $it" },
+        info?.coordinate,
+        info?.accuracy
+    )
 
     return LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -114,7 +172,7 @@ private fun createTrackInfoWindow(context: Context, marker: Marker): View {
 
         addView(AndroidTextView(context).apply {
             text = statusText
-            setTextColor(AndroidColor.parseColor("#10B981"))
+            setTextColor(info?.statusColor ?: AndroidColor.parseColor("#0F9F7A"))
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             includeFontPadding = false
@@ -122,7 +180,7 @@ private fun createTrackInfoWindow(context: Context, marker: Marker): View {
         })
 
         addView(AndroidTextView(context).apply {
-            text = actionText
+            text = detailLines.joinToString("\n")
             setTextColor(AndroidColor.parseColor("#6B7280"))
             textSize = 12f
             includeFontPadding = false
@@ -173,34 +231,36 @@ private fun renderTrackOnMap(
     }
 
     mapLocations.forEachIndexed { index, (event, latLng) ->
-        val isEndpoint = index == 0 || index == mapLocations.lastIndex
-        val isSent = event.status == EventStatus.SENT
-
-        val markerColor = when {
-            isSent -> BitmapDescriptorFactory.HUE_GREEN
-            event.status == EventStatus.FAILED -> BitmapDescriptorFactory.HUE_RED
-            else -> BitmapDescriptorFactory.HUE_ORANGE
-        }
-
         val statusStr = when (event.status) {
-            EventStatus.SENT -> "已发送"
-            EventStatus.FAILED -> "发送失败"
-            else -> "待发送"
+            EventStatus.SENT -> "已上报"
+            EventStatus.FAILED -> "上报失败"
+            EventStatus.PENDING -> "待上报"
         }
+        val statusColor = when (event.status) {
+            EventStatus.SENT -> AndroidColor.parseColor("#0F9F7A")
+            EventStatus.FAILED -> AndroidColor.parseColor("#DC2626")
+            EventStatus.PENDING -> AndroidColor.parseColor("#F59E0B")
+        }
+        val sequence = index + 1
+        val timeText = formatTrackTime(event.timestamp)
+        val coordinateText = "坐标: %.6f, %.6f".format(event.latitude, event.longitude)
+        val accuracyText = "精度: ${event.accuracy?.let { "%.0f米".format(it) } ?: "未知"}"
 
         val markerOptions = MarkerOptions().apply {
             position(latLng)
-            title(formatTrackTime(event.timestamp))
+            title("轨迹点 #$sequence")
             snippet(statusStr)
-            icon(BitmapDescriptorFactory.defaultMarker(markerColor))
-            if (!isEndpoint) {
-                anchor(0.5f, 0.5f)
-            }
+            icon(createNumberedMarkerIcon(context, sequence, event.status))
+            anchor(0.5f, 0.5f)
         }
         map.addMarker(markerOptions)?.`object` = TrackMarkerInfo(
-            title = formatTrackTime(event.timestamp),
+            title = "轨迹点 #$sequence",
             status = statusStr,
-            action = "点击卡片在高德地图中打开"
+            statusColor = statusColor,
+            time = "时间: $timeText",
+            address = AmapReverseGeocoder.extractAddress(event.detail),
+            coordinate = coordinateText,
+            accuracy = accuracyText
         )
     }
 
@@ -331,12 +391,24 @@ fun MapScreen(dao: MonitorEventDao) {
                         return@LaunchedEffect
                     }
 
+                    val config = AppConfig(context).getConfig()
+                    val address = AmapReverseGeocoder.resolveAddress(
+                        context = context,
+                        apiKey = config.amapWebApiKey,
+                        latitude = location.latitude,
+                        longitude = location.longitude
+                    )
                     val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
                     val event = MonitorEvent(
                         type = EventType.LOCATION,
                         title = "手动定位",
-                        summary = "%.4f, %.4f".format(location.latitude, location.longitude),
+                        summary = AmapReverseGeocoder.formatSummary(
+                            address,
+                            location.latitude,
+                            location.longitude
+                        ),
                         detail = buildString {
+                            if (address != null) appendLine("地址: $address")
                             appendLine("经度: ${location.longitude}")
                             appendLine("纬度: ${location.latitude}")
                             appendLine("精度: ${location.accuracy}米")
@@ -395,11 +467,10 @@ fun MapScreen(dao: MonitorEventDao) {
 
                     override fun getInfoContents(marker: Marker): View? = null
                 })
-                map.setOnInfoWindowClickListener { marker ->
-                    val uri = Uri.parse(
-                        "https://uri.amap.com/marker?position=${marker.position.longitude},${marker.position.latitude}&name=轨迹点"
-                    )
-                    context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                map.setOnMarkerClickListener { marker ->
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(marker.position, 16f))
+                    marker.showInfoWindow()
+                    true
                 }
                 map.setOnMapLoadedListener {
                     isMapLoaded = true

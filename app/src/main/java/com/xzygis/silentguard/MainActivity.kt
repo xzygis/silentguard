@@ -95,7 +95,9 @@ class MainActivity : ComponentActivity() {
     private fun SilentGuardApp() {
         val navController = rememberNavController()
         val config by appConfig.configFlow.collectAsState(initial = MonitorConfig())
-        val dao = remember { AppDatabase.getInstance(this@MainActivity).monitorEventDao() }
+        val database = remember { AppDatabase.getInstance(this@MainActivity) }
+        val dao = remember(database) { database.monitorEventDao() }
+        val mailRecordDao = remember(database) { database.mailSendRecordDao() }
 
         Scaffold(
             bottomBar = {
@@ -189,7 +191,10 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 composable(Screen.ActivityLog.route) {
-                    ActivityLogScreen(dao = dao)
+                    ActivityLogScreen(
+                        dao = dao,
+                        mailRecordDao = mailRecordDao
+                    )
                 }
                 composable(Screen.Map.route) {
                     MapScreen(dao = dao)

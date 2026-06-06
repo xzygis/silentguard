@@ -41,8 +41,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
+import com.xzygis.silentguard.data.MailSendRecord
+import com.xzygis.silentguard.data.MailSendRecordDao
+import com.xzygis.silentguard.data.MailSendStatus
 import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.data.MonitorEventDao
+import com.xzygis.silentguard.location.AmapReverseGeocoder
 import com.xzygis.silentguard.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -50,19 +54,27 @@ import java.util.Date
 import java.util.Locale
 
 private enum class FilterType(val label: String) {
-    ALL("全部"), SMS("短信"), LOCATION("位置")
+    ALL("全部"), SMS("短信"), LOCATION("位置"), MAIL("邮件")
 }
 
 @Composable
-fun ActivityLogScreen(dao: MonitorEventDao) {
+fun ActivityLogScreen(
+    dao: MonitorEventDao,
+    mailRecordDao: MailSendRecordDao
+) {
     var selectedFilter by remember { mutableStateOf(FilterType.ALL) }
     var expandedEventId by remember { mutableStateOf<Long?>(null) }
+    var expandedMailRecordId by remember { mutableStateOf<Long?>(null) }
 
     val events by when (selectedFilter) {
         FilterType.ALL -> dao.getAllEvents()
         FilterType.SMS -> dao.getEventsByType(EventType.SMS)
         FilterType.LOCATION -> dao.getEventsByType(EventType.LOCATION)
+        FilterType.MAIL -> dao.getAllEvents()
     }.collectAsState(initial = emptyList())
+    val mailRecords by mailRecordDao.getAllRecords().collectAsState(initial = emptyList())
+    val isMailTab = selectedFilter == FilterType.MAIL
+    val isEmpty = if (isMailTab) mailRecords.isEmpty() else events.isEmpty()
 
     Column(
         modifier = Modifier
@@ -96,7 +108,7 @@ fun ActivityLogScreen(dao: MonitorEventDao) {
             }
         }
 
-        if (events.isEmpty()) {
+        if (isEmpty) {
             // 空状态
             Box(
                 modifier = Modifier
@@ -116,6 +128,7 @@ fun ActivityLogScreen(dao: MonitorEventDao) {
                             FilterType.ALL -> "记录将在守护启动后出现"
                             FilterType.SMS -> "暂无短信记录"
                             FilterType.LOCATION -> "暂无位置记录"
+                            FilterType.MAIL -> "暂无邮件发送记录"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
@@ -127,45 +140,58 @@ fun ActivityLogScreen(dao: MonitorEventDao) {
                 modifier = Modifier.padding(horizontal = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                // 按日期分组
-                val groupedEvents = events.groupBy { event ->
-                    val cal = Calendar.getInstance().apply { timeInMillis = event.timestamp }
-                    val today = Calendar.getInstance()
-                    val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+                if (isMailTab) {
+                    val groupedRecords = mailRecords.groupBy { dateLabel(it.timestamp) }
 
-                    when {
-                        isSameDay(cal, today) -> "今天"
-                        isSameDay(cal, yesterday) -> "昨天"
-                        else -> SimpleDateFormat("M月d日", Locale.getDefault()).format(Date(event.timestamp))
+                    groupedRecords.forEach { (dateLabel, records) ->
+                        dateHeader(dateLabel)
+
+                        items(records, key = { "mail-${it.id}" }) { record ->
+                            val isExpanded = expandedMailRecordId == record.id
+                            MailRecordCard(
+                                record = record,
+                                isExpanded = isExpanded,
+                                onClick = {
+                                    expandedMailRecordId = if (isExpanded) null else record.id
+                                }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
                     }
-                }
+                } else {
+                    val groupedEvents = events.groupBy { dateLabel(it.timestamp) }
 
-                groupedEvents.forEach { (dateLabel, dayEvents) ->
-                    item {
-                        Text(
-                            text = dateLabel,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-                    }
+                    groupedEvents.forEach { (dateLabel, dayEvents) ->
+                        dateHeader(dateLabel)
 
-                    items(dayEvents, key = { it.id }) { event ->
-                        val isExpanded = expandedEventId == event.id
-                        EventCard(
-                            event = event,
-                            isExpanded = isExpanded,
-                            onClick = {
-                                expandedEventId = if (isExpanded) null else event.id
-                            }
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        items(dayEvents, key = { "event-${it.id}" }) { event ->
+                            val isExpanded = expandedEventId == event.id
+                            EventCard(
+                                event = event,
+                                isExpanded = isExpanded,
+                                onClick = {
+                                    expandedEventId = if (isExpanded) null else event.id
+                                }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
                     }
                 }
 
                 item { Spacer(modifier = Modifier.height(16.dp)) }
             }
         }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.dateHeader(dateLabel: String) {
+    item {
+        Text(
+            text = dateLabel,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(vertical = 12.dp)
+        )
     }
 }
 
@@ -196,6 +222,11 @@ private fun EventCard(
         EventStatus.SENT -> Success
         EventStatus.PENDING -> Warning
         EventStatus.FAILED -> Error
+    }
+    val address = if (event.type == EventType.LOCATION) {
+        AmapReverseGeocoder.extractAddress(event.detail)
+    } else {
+        null
     }
 
     Surface(
@@ -291,6 +322,14 @@ private fun EventCard(
 
                     if (event.latitude != null && event.longitude != null) {
                         Spacer(modifier = Modifier.height(8.dp))
+                        if (address != null) {
+                            Text(
+                                text = "地址: $address",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -312,6 +351,134 @@ private fun EventCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MailRecordCard(
+    record: MailSendRecord,
+    isExpanded: Boolean,
+    onClick: () -> Unit
+) {
+    val statusLabel = when (record.status) {
+        MailSendStatus.SENT -> "发送成功"
+        MailSendStatus.FAILED -> "发送失败"
+    }
+    val statusColor = when (record.status) {
+        MailSendStatus.SENT -> Success
+        MailSendStatus.FAILED -> Error
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(AccentSurface),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "MAIL",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Accent,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = record.subject,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = record.recipient.ifBlank { "未填写接收邮箱" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = SimpleDateFormat("HH:mm", Locale.getDefault())
+                            .format(Date(record.timestamp)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = statusColor.copy(alpha = 0.1f)
+                    ) {
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = statusColor,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "接收邮箱: ${record.recipient.ifBlank { "未填写" }}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (record.errorMessage.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "失败原因: ${record.errorMessage}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Error
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun dateLabel(timestamp: Long): String {
+    val cal = Calendar.getInstance().apply { timeInMillis = timestamp }
+    val today = Calendar.getInstance()
+    val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+
+    return when {
+        isSameDay(cal, today) -> "今天"
+        isSameDay(cal, yesterday) -> "昨天"
+        else -> SimpleDateFormat("M月d日", Locale.getDefault()).format(Date(timestamp))
     }
 }
 
