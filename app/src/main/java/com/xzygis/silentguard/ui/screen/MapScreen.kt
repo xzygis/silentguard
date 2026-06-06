@@ -1,7 +1,9 @@
 package com.xzygis.silentguard.ui.screen
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,11 +43,17 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
+import com.xzygis.silentguard.data.EventStatus
+import com.xzygis.silentguard.data.EventType
 import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.data.MonitorEventDao
 import com.xzygis.silentguard.ui.theme.*
+import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -59,6 +68,47 @@ fun MapScreen(dao: MonitorEventDao) {
     var selectedRange by remember { mutableStateOf(TimeRange.TODAY) }
     val context = LocalContext.current
 
+    // 打开页面时立即获取一次当前位置并记录
+    LaunchedEffect(Unit) {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasPermission) {
+            try {
+                val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+                val cts = CancellationTokenSource()
+                val location = fusedClient.getCurrentLocation(
+                    Priority.PRIORITY_HIGH_ACCURACY, cts.token
+                ).await()
+                if (location != null) {
+                    val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                    val event = MonitorEvent(
+                        type = EventType.LOCATION,
+                        title = "手动定位",
+                        summary = "%.4f, %.4f".format(location.latitude, location.longitude),
+                        detail = buildString {
+                            appendLine("经度: ${location.longitude}")
+                            appendLine("纬度: ${location.latitude}")
+                            appendLine("精度: ${location.accuracy}米")
+                            appendLine("时间: ${timeFormat.format(Date())}")
+                            appendLine("来源: 轨迹页面打开")
+                        },
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        accuracy = location.accuracy,
+                        status = EventStatus.PENDING
+                    )
+                    dao.insert(event)
+                }
+            } catch (e: Exception) {
+                Log.e("MapScreen", "获取当前位置失败: ${e.message}", e)
+            }
+        }
+    }
+
     val now = System.currentTimeMillis()
     val startTime = if (selectedRange.hours > 0) {
         now - selectedRange.hours * 3600_000L
@@ -68,6 +118,9 @@ fun MapScreen(dao: MonitorEventDao) {
 
     val locations by dao.getLocationEventsBetween(startTime, now)
         .collectAsState(initial = emptyList())
+
+    val recordedCount = locations.count { it.status == EventStatus.PENDING }
+    val reportedCount = locations.count { it.status == EventStatus.SENT }
 
     Column(
         modifier = Modifier
@@ -101,17 +154,30 @@ fun MapScreen(dao: MonitorEventDao) {
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // 轨迹点数
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = LocationSurface
-            ) {
-                Text(
-                    text = "${locations.size} 个点",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = LocationColor,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                )
+            // 轨迹点数统计 - 区分已记录/已上报
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = WarningSurface
+                ) {
+                    Text(
+                        text = "$recordedCount 待报",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Warning,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = LocationSurface
+                ) {
+                    Text(
+                        text = "$reportedCount 已报",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = LocationColor,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                    )
+                }
             }
         }
 
@@ -130,7 +196,7 @@ fun MapScreen(dao: MonitorEventDao) {
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "位置上报后将在此显示轨迹",
+                        text = "正在获取位置信息...",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
@@ -185,7 +251,6 @@ private fun TrajectoryMiniMap(
 ) {
     val lineColor = LocationColor
     val dotColor = LocationColor
-    val bgGridColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
 
     Canvas(modifier = modifier) {
         if (locations.size < 2) {
@@ -262,7 +327,8 @@ private fun LocationPointItem(
     isLast: Boolean,
     onClick: () -> Unit
 ) {
-    val timelineColor = LocationColor
+    val isReported = event.status == EventStatus.SENT
+    val timelineColor = if (isReported) LocationColor else Warning
 
     Row(
         modifier = Modifier
@@ -320,12 +386,39 @@ private fun LocationPointItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "%.6f, %.6f".format(event.latitude, event.longitude),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.Medium
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "%.6f, %.6f".format(event.latitude, event.longitude),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Medium
+                        )
+                        // 状态标签
+                        val statusColor = when (event.status) {
+                            EventStatus.SENT -> LocationColor
+                            EventStatus.FAILED -> Error
+                            else -> Warning
+                        }
+                        val statusText = when (event.status) {
+                            EventStatus.SENT -> "已报"
+                            EventStatus.FAILED -> "失败"
+                            else -> "待报"
+                        }
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = statusColor,
+                            modifier = Modifier
+                                .background(
+                                    color = statusColor.copy(alpha = 0.1f),
+                                    shape = RoundedCornerShape(4.dp)
+                                )
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
                     if (event.accuracy != null) {
                         Text(
                             text = "精度 %.0f米".format(event.accuracy),
