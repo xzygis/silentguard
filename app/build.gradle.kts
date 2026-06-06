@@ -1,3 +1,5 @@
+import com.android.build.gradle.internal.api.BaseVariantOutputImpl
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -82,6 +84,13 @@ android {
         }
         jniLibs {
             useLegacyPackaging = true
+        }
+    }
+
+    applicationVariants.all {
+        val apkVersionName = versionName
+        outputs.all {
+            (this as BaseVariantOutputImpl).outputFileName = "silentguard-$apkVersionName.apk"
         }
     }
 }
