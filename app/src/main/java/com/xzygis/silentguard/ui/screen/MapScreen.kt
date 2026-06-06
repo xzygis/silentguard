@@ -241,7 +241,7 @@ private fun renderTrackOnMap(
             EventStatus.FAILED -> AndroidColor.parseColor("#DC2626")
             EventStatus.PENDING -> AndroidColor.parseColor("#F59E0B")
         }
-        val sequence = index + 1
+        val sequence = mapLocations.size - index
         val timeText = formatTrackTime(event.timestamp)
         val coordinateText = "坐标: %.6f, %.6f".format(event.latitude, event.longitude)
         val accuracyText = "精度: ${event.accuracy?.let { "%.0f米".format(it) } ?: "未知"}"
