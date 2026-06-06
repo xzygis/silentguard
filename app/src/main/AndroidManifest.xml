@@ -4,6 +4,8 @@
 
     <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <!-- SMS -->
     <uses-permission android:name="android.permission.READ_SMS" />
@@ -30,6 +32,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
 
+        <!-- 高德地图 API Key -->
+        <meta-data
+            android:name="com.amap.api.v2.apikey"
+            android:value="350aac6ace995fa7f588f7f589589fd1" />
+
         <!-- MainActivity -->
         <activity
             android:name=".MainActivity"
@@ -49,6 +56,16 @@
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
         </receiver>
+
+        <!-- 短信通知监听服务（降级方案） -->
+        <service
+            android:name=".service.SmsNotificationListenerService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <!-- Foreground Service for Location -->
         <service
