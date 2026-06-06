@@ -90,7 +90,7 @@ cd silentguard
 ./gradlew assembleDebug
 ```
 
-APK 输出路径：`app/build/outputs/apk/debug/app-debug.apk`
+APK 输出路径：`app/build/outputs/apk/debug/silentguard-{版本号}.apk`
 
 <details>
 <summary>📖 详细构建指南</summary>
@@ -114,7 +114,7 @@ export ANDROID_HOME=$HOME/Library/Android/sdk  # macOS
 ./gradlew assembleDebug
 
 # 安装到手机
-adb install app/build/outputs/apk/debug/app-debug.apk
+adb install app/build/outputs/apk/debug/silentguard-{版本号}.apk
 ```
 
 #### 常见问题

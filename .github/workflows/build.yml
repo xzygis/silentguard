@@ -32,6 +32,7 @@ jobs:
           PATCH=$((PATCH + 1))
           NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
           echo "TAG=$NEW_TAG" >> $GITHUB_OUTPUT
+          echo "VERSION_NAME=${NEW_TAG#v}" >> $GITHUB_OUTPUT
           echo "Generated tag: $NEW_TAG"
 
       - name: Create and push tag
@@ -72,11 +73,11 @@ jobs:
             合并的 PR: #${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }}
 
             ### 安装方法
-            1. 下载下方的 `app-debug.apk` 文件
+            1. 下载下方的 `silentguard-${{ steps.version.outputs.VERSION_NAME }}.apk` 文件
             2. 传输到 Android 手机上
             3. 打开文件安装（需允许"安装未知应用"）
 
             > 最低支持 Android 8.0 (API 26)
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: app/build/outputs/apk/debug/silentguard-*.apk
           draft: false
           prerelease: false
