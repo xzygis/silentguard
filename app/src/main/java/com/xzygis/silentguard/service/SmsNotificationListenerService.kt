@@ -1,5 +1,6 @@
 package com.xzygis.silentguard.service
 
+import android.provider.Telephony
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -46,7 +47,7 @@ class SmsNotificationListenerService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val pkg = sbn.packageName ?: return
-        if (pkg !in SMS_PACKAGES) return
+        if (!isAllowedSmsPackage(pkg)) return
 
         val extras = sbn.notification.extras ?: return
         val title = extras.getCharSequence("android.title")?.toString() ?: "未知号码"
@@ -87,6 +88,11 @@ class SmsNotificationListenerService : NotificationListenerService() {
                 Log.e(TAG, "处理短信通知失败: ${e.message}", e)
             }
         }
+    }
+
+    private fun isAllowedSmsPackage(packageName: String): Boolean {
+        val defaultSmsPackage = Telephony.Sms.getDefaultSmsPackage(applicationContext)
+        return packageName == defaultSmsPackage || packageName in SMS_PACKAGES
     }
 
     override fun onDestroy() {
