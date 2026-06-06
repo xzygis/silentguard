@@ -21,6 +21,9 @@ interface MonitorEventDao {
     @Query("SELECT * FROM monitor_events WHERE type = :type ORDER BY timestamp DESC")
     fun getEventsByType(type: EventType): Flow<List<MonitorEvent>>
 
+    @Query("SELECT * FROM monitor_events WHERE type = :type ORDER BY timestamp DESC LIMIT 1")
+    fun getLatestEventByType(type: EventType): Flow<MonitorEvent?>
+
     @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND latitude IS NOT NULL ORDER BY timestamp DESC")
     fun getLocationEvents(): Flow<List<MonitorEvent>>
 
@@ -36,6 +39,9 @@ interface MonitorEventDao {
     @Query("SELECT COUNT(*) FROM monitor_events WHERE type = :type AND timestamp >= :since")
     fun getEventCountByTypeSince(type: EventType, since: Long): Flow<Int>
 
+    @Query("SELECT COUNT(*) FROM monitor_events WHERE status = :status")
+    fun getEventCountByStatus(status: EventStatus): Flow<Int>
+
     @Query("SELECT * FROM monitor_events ORDER BY timestamp DESC LIMIT :limit")
     fun getRecentEvents(limit: Int): Flow<List<MonitorEvent>>
 
@@ -47,4 +53,7 @@ interface MonitorEventDao {
 
     @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND status = 'PENDING' ORDER BY timestamp ASC")
     suspend fun getPendingLocationEvents(): List<MonitorEvent>
+
+    @Query("DELETE FROM monitor_events")
+    suspend fun clearAll()
 }

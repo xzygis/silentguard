@@ -4,7 +4,7 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 enum class MailSendStatus {
-    SENT, FAILED
+    QUEUED, RETRYING, SENT, FAILED
 }
 
 @Entity(tableName = "mail_send_records")
@@ -15,5 +15,6 @@ data class MailSendRecord(
     val recipient: String,
     val status: MailSendStatus,
     val errorMessage: String = "",
+    val retryCount: Int = 0,
     val timestamp: Long = System.currentTimeMillis()
 )

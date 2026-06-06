@@ -361,10 +361,14 @@ private fun MailRecordCard(
     onClick: () -> Unit
 ) {
     val statusLabel = when (record.status) {
+        MailSendStatus.QUEUED -> "等待发送"
+        MailSendStatus.RETRYING -> "重试中"
         MailSendStatus.SENT -> "发送成功"
         MailSendStatus.FAILED -> "发送失败"
     }
     val statusColor = when (record.status) {
+        MailSendStatus.QUEUED -> Warning
+        MailSendStatus.RETRYING -> Warning
         MailSendStatus.SENT -> Success
         MailSendStatus.FAILED -> Error
     }
@@ -455,6 +459,14 @@ private fun MailRecordCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )
+                        if (record.retryCount > 0) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "重试次数: ${record.retryCount}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Warning
+                            )
+                        }
                         if (record.errorMessage.isNotBlank()) {
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(

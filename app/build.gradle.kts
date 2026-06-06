@@ -140,4 +140,6 @@ dependencies {
 
     // 高德地图 SDK（注意：v10.x 的 so 尚未适配 16KB page alignment，已通过 useLegacyPackaging 规避）
     implementation("com.amap.api:3dmap:10.0.600")
+
+    testImplementation("junit:junit:4.13.2")
 }
