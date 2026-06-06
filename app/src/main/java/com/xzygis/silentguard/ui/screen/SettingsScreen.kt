@@ -63,6 +63,7 @@ fun SettingsScreen(
     var locationInterval by remember(config.locationIntervalMinutes) { mutableStateOf(config.locationIntervalMinutes.toString()) }
     var emailInterval by remember(config.emailIntervalMinutes) { mutableStateOf(config.emailIntervalMinutes.toString()) }
     var useHighAccuracy by remember(config.useHighAccuracy) { mutableStateOf(config.useHighAccuracy) }
+    var amapWebApiKey by remember(config.amapWebApiKey) { mutableStateOf(config.amapWebApiKey) }
 
     Column(
         modifier = Modifier
@@ -185,6 +186,21 @@ fun SettingsScreen(
             }
         }
 
+        // 地图配置
+        SettingsSection(title = "地图邮件") {
+            SettingsTextField(
+                value = amapWebApiKey,
+                onValueChange = { amapWebApiKey = it },
+                label = "高德 Web API Key",
+                placeholder = "用于邮件中的静态地图"
+            )
+            Text(
+                text = "配置后，位置邮件将包含带路径标记的地图图片。需在高德开放平台申请「Web服务」类型的 Key。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
         // 操作
         Button(
             onClick = {
@@ -198,7 +214,8 @@ fun SettingsScreen(
                         locationIntervalMinutes = locationInterval.trim().toIntOrNull() ?: 5,
                         emailIntervalMinutes = emailInterval.trim().toIntOrNull() ?: 60,
                         isMonitoringEnabled = config.isMonitoringEnabled,
-                        useHighAccuracy = useHighAccuracy
+                        useHighAccuracy = useHighAccuracy,
+                        amapWebApiKey = amapWebApiKey.trim()
                     )
                     appConfig.saveConfig(newConfig)
                     Toast.makeText(context, "配置已保存", Toast.LENGTH_SHORT).show()

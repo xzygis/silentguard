@@ -26,7 +26,8 @@ data class MonitorConfig(
     val locationIntervalMinutes: Int = 5,
     val emailIntervalMinutes: Int = 60,
     val isMonitoringEnabled: Boolean = false,
-    val useHighAccuracy: Boolean = false
+    val useHighAccuracy: Boolean = false,
+    val amapWebApiKey: String = ""
 )
 
 class AppConfig(private val context: Context) {
@@ -40,6 +41,7 @@ class AppConfig(private val context: Context) {
         val EMAIL_INTERVAL = intPreferencesKey("email_interval_minutes")
         val IS_MONITORING_ENABLED = booleanPreferencesKey("is_monitoring_enabled")
         val USE_HIGH_ACCURACY = booleanPreferencesKey("use_high_accuracy")
+        val AMAP_WEB_API_KEY = stringPreferencesKey("amap_web_api_key")
     }
 
     private val encryptedPrefs: SharedPreferences by lazy {
@@ -63,7 +65,8 @@ class AppConfig(private val context: Context) {
             locationIntervalMinutes = prefs[Keys.LOCATION_INTERVAL] ?: 5,
             emailIntervalMinutes = prefs[Keys.EMAIL_INTERVAL] ?: 60,
             isMonitoringEnabled = prefs[Keys.IS_MONITORING_ENABLED] ?: false,
-            useHighAccuracy = prefs[Keys.USE_HIGH_ACCURACY] ?: false
+            useHighAccuracy = prefs[Keys.USE_HIGH_ACCURACY] ?: false,
+            amapWebApiKey = prefs[Keys.AMAP_WEB_API_KEY] ?: ""
         )
     }
 
@@ -85,6 +88,7 @@ class AppConfig(private val context: Context) {
             prefs[Keys.EMAIL_INTERVAL] = config.emailIntervalMinutes
             prefs[Keys.IS_MONITORING_ENABLED] = config.isMonitoringEnabled
             prefs[Keys.USE_HIGH_ACCURACY] = config.useHighAccuracy
+            prefs[Keys.AMAP_WEB_API_KEY] = config.amapWebApiKey
         }
     }
 

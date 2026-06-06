@@ -23,7 +23,7 @@ class MailSender(private val context: Context) {
 
     private val appConfig = AppConfig(context)
 
-    suspend fun sendMail(subject: String, body: String): Boolean {
+    suspend fun sendMail(subject: String, body: String, isHtml: Boolean = false): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 val config = appConfig.configFlow.first()
@@ -61,7 +61,11 @@ class MailSender(private val context: Context) {
                     setFrom(InternetAddress(config.senderEmail))
                     setRecipient(Message.RecipientType.TO, InternetAddress(config.recipientEmail))
                     setSubject(subject)
-                    setText(body)
+                    if (isHtml) {
+                        setContent(body, "text/html; charset=UTF-8")
+                    } else {
+                        setText(body)
+                    }
                 }
 
                 Transport.send(message)

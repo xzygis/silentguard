@@ -21,11 +21,13 @@ class MailWorker(
         private const val TAG = "MailWorker"
         private const val KEY_SUBJECT = "subject"
         private const val KEY_BODY = "body"
+        private const val KEY_IS_HTML = "is_html"
 
-        fun enqueue(context: Context, subject: String, body: String) {
+        fun enqueue(context: Context, subject: String, body: String, isHtml: Boolean = false) {
             val data = Data.Builder()
                 .putString(KEY_SUBJECT, subject)
                 .putString(KEY_BODY, body)
+                .putBoolean(KEY_IS_HTML, isHtml)
                 .build()
 
             val constraints = Constraints.Builder()
@@ -45,9 +47,10 @@ class MailWorker(
     override suspend fun doWork(): Result {
         val subject = inputData.getString(KEY_SUBJECT) ?: return Result.failure()
         val body = inputData.getString(KEY_BODY) ?: return Result.failure()
+        val isHtml = inputData.getBoolean(KEY_IS_HTML, false)
 
         val mailSender = MailSender(applicationContext)
-        val success = mailSender.sendMail(subject, body)
+        val success = mailSender.sendMail(subject, body, isHtml)
 
         return if (success) {
             Log.i(TAG, "邮件发送成功: $subject")
