@@ -1,6 +1,9 @@
 package com.xzygis.silentguard.mail
 
+import android.content.Context
 import com.xzygis.silentguard.data.MonitorEvent
+import com.xzygis.silentguard.location.AmapCoordinateConverter
+import java.util.Locale
 
 /**
  * 构建高德静态地图 URL，支持路径线和标记点
@@ -18,9 +21,15 @@ object StaticMapUrlBuilder {
      * @param apiKey 高德 Web 服务 API Key
      * @return 静态地图图片 URL，事件不足时返回 null
      */
-    fun buildUrl(events: List<MonitorEvent>, apiKey: String): String? {
-        val points = events.filter { it.longitude != null && it.latitude != null }
-        if (points.isEmpty() || apiKey.isBlank()) return null
+    fun buildUrl(context: Context, events: List<MonitorEvent>, apiKey: String): String? {
+        if (apiKey.isBlank()) return null
+
+        val points = events.mapNotNull { event ->
+            val latitude = event.latitude ?: return@mapNotNull null
+            val longitude = event.longitude ?: return@mapNotNull null
+            AmapCoordinateConverter.toAmapLatLng(context, latitude, longitude)
+        }
+        if (points.isEmpty()) return null
 
         val sb = StringBuilder(BASE_URL)
         sb.append("?key=$apiKey")
@@ -30,21 +39,25 @@ object StaticMapUrlBuilder {
         // 标记起点（绿色 S）和终点（红色 E）
         val markers = buildString {
             val first = points.first()
-            append("mid,0x00CC33,S:${first.longitude},${first.latitude}")
+            append("mid,0x00CC33,S:${first.toUrlPoint()}")
             if (points.size > 1) {
                 val last = points.last()
-                append("|mid,0xFF3300,E:${last.longitude},${last.latitude}")
+                append("|mid,0xFF3300,E:${last.toUrlPoint()}")
             }
         }
         sb.append("&markers=$markers")
 
         // 路径折线（蓝色实线）
         if (points.size >= 2) {
-            val pathCoords = points.joinToString(";") { "${it.longitude},${it.latitude}" }
+            val pathCoords = points.joinToString(";") { it.toUrlPoint() }
             // 格式: 线宽,颜色,透明度,填充颜色,填充透明度:坐标列表
             sb.append("&paths=5,0x2196F3,1,,:$pathCoords")
         }
 
         return sb.toString()
+    }
+
+    private fun com.amap.api.maps.model.LatLng.toUrlPoint(): String {
+        return String.format(Locale.US, "%.6f,%.6f", longitude, latitude)
     }
 }
