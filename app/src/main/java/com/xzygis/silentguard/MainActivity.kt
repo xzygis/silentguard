@@ -27,7 +27,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -96,7 +95,6 @@ class MainActivity : ComponentActivity() {
     private fun SilentGuardApp() {
         val navController = rememberNavController()
         val config by appConfig.configFlow.collectAsState(initial = MonitorConfig())
-        val scope = rememberCoroutineScope()
         val dao = remember { AppDatabase.getInstance(this@MainActivity).monitorEventDao() }
 
         Scaffold(
@@ -141,7 +139,7 @@ class MainActivity : ComponentActivity() {
                                 selectedTextColor = MaterialTheme.colorScheme.primary,
                                 unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                 unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                                indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
                             )
                         )
                     }
@@ -159,6 +157,7 @@ class MainActivity : ComponentActivity() {
                     DashboardScreen(
                         isMonitoring = config.isMonitoringEnabled,
                         dao = dao,
+                        config = config,
                         onToggleMonitoring = { toggleMonitoring(it) }
                     )
                 }

@@ -188,9 +188,9 @@ private fun EventCard(
         EventType.LOCATION -> "GPS"
     }
     val statusLabel = when (event.status) {
-        EventStatus.SENT -> "已发送"
-        EventStatus.PENDING -> "待发送"
-        EventStatus.FAILED -> "失败"
+        EventStatus.SENT -> "已上报"
+        EventStatus.PENDING -> "待上报"
+        EventStatus.FAILED -> "上报失败"
     }
     val statusColor = when (event.status) {
         EventStatus.SENT -> Success

@@ -41,7 +41,6 @@ class AppConfig(private val context: Context) {
         val EMAIL_INTERVAL = intPreferencesKey("email_interval_minutes")
         val IS_MONITORING_ENABLED = booleanPreferencesKey("is_monitoring_enabled")
         val USE_HIGH_ACCURACY = booleanPreferencesKey("use_high_accuracy")
-        val AMAP_WEB_API_KEY = stringPreferencesKey("amap_web_api_key")
     }
 
     private val encryptedPrefs: SharedPreferences by lazy {
@@ -66,7 +65,7 @@ class AppConfig(private val context: Context) {
             emailIntervalMinutes = prefs[Keys.EMAIL_INTERVAL] ?: 60,
             isMonitoringEnabled = prefs[Keys.IS_MONITORING_ENABLED] ?: false,
             useHighAccuracy = prefs[Keys.USE_HIGH_ACCURACY] ?: false,
-            amapWebApiKey = prefs[Keys.AMAP_WEB_API_KEY] ?: ""
+            amapWebApiKey = encryptedPrefs.getString("amap_web_api_key", "") ?: ""
         )
     }
 
@@ -75,8 +74,11 @@ class AppConfig(private val context: Context) {
     }
 
     suspend fun saveConfig(config: MonitorConfig) {
-        // 密码加密存储
-        encryptedPrefs.edit().putString("sender_password", config.senderPassword).apply()
+        // 敏感数据加密存储
+        encryptedPrefs.edit()
+            .putString("sender_password", config.senderPassword)
+            .putString("amap_web_api_key", config.amapWebApiKey)
+            .apply()
 
         // 其他配置存 DataStore
         context.dataStore.edit { prefs ->
@@ -88,7 +90,6 @@ class AppConfig(private val context: Context) {
             prefs[Keys.EMAIL_INTERVAL] = config.emailIntervalMinutes
             prefs[Keys.IS_MONITORING_ENABLED] = config.isMonitoringEnabled
             prefs[Keys.USE_HIGH_ACCURACY] = config.useHighAccuracy
-            prefs[Keys.AMAP_WEB_API_KEY] = config.amapWebApiKey
         }
     }
 

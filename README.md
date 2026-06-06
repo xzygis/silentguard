@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app/src/main/res/drawable/ic_launcher_foreground.xml" width="120" alt="SilentGuard Logo" />
+  <img src="docs/logo.svg" width="120" alt="SilentGuard Logo" />
 </p>
 
 <h1 align="center">SilentGuard</h1>

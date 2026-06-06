@@ -19,13 +19,13 @@ sealed class Screen(
 ) {
     data object Dashboard : Screen(
         route = "dashboard",
-        label = "仪表盘",
+        label = "首页",
         selectedIcon = Icons.Filled.Home,
         unselectedIcon = Icons.Outlined.Home
     )
     data object ActivityLog : Screen(
         route = "activity_log",
-        label = "活动",
+        label = "记录",
         selectedIcon = Icons.Filled.List,
         unselectedIcon = Icons.Outlined.List
     )

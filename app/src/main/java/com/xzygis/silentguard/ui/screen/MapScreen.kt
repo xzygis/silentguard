@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -248,34 +249,6 @@ fun MapScreen(dao: MonitorEventDao) {
                     shape = RoundedCornerShape(10.dp)
                 )
             }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            // 轨迹点数统计
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = WarningSurface
-                ) {
-                    Text(
-                        text = "$recordedCount 待报",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Warning,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-                    )
-                }
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = LocationSurface
-                ) {
-                    Text(
-                        text = "$reportedCount 已报",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = LocationColor,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-                    )
-                }
-            }
         }
 
         if (locations.isEmpty()) {
@@ -283,7 +256,7 @@ fun MapScreen(dao: MonitorEventDao) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(240.dp)
+                    .height(280.dp)
                     .padding(horizontal = 20.dp),
                 shape = RoundedCornerShape(16.dp)
             ) {
@@ -322,7 +295,7 @@ fun MapScreen(dao: MonitorEventDao) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(240.dp)
+                    .height(280.dp)
                     .padding(horizontal = 20.dp),
                 shape = RoundedCornerShape(16.dp)
             ) {
@@ -338,6 +311,14 @@ fun MapScreen(dao: MonitorEventDao) {
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            TrackSummaryBar(
+                totalCount = locations.size,
+                pendingCount = recordedCount,
+                reportedCount = reportedCount
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             // 轨迹点列表
             LazyColumn(
@@ -371,8 +352,11 @@ private fun LocationPointItem(
     isLast: Boolean,
     onClick: () -> Unit
 ) {
-    val isReported = event.status == EventStatus.SENT
-    val timelineColor = if (isReported) LocationColor else Warning
+    val timelineColor = when (event.status) {
+        EventStatus.SENT -> LocationColor
+        EventStatus.FAILED -> Error
+        EventStatus.PENDING -> Warning
+    }
 
     Row(
         modifier = Modifier
@@ -435,8 +419,8 @@ private fun LocationPointItem(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = "%.6f, %.6f".format(event.latitude, event.longitude),
-                            style = MaterialTheme.typography.bodySmall,
+                            text = formatTrackTime(event.timestamp),
+                            style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Medium
                         )
@@ -447,9 +431,9 @@ private fun LocationPointItem(
                             else -> Warning
                         }
                         val statusText = when (event.status) {
-                            EventStatus.SENT -> "已报"
-                            EventStatus.FAILED -> "失败"
-                            else -> "待报"
+                            EventStatus.SENT -> "已上报"
+                            EventStatus.FAILED -> "上报失败"
+                            else -> "待上报"
                         }
                         Text(
                             text = statusText,
@@ -463,16 +447,19 @@ private fun LocationPointItem(
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
-                    if (event.accuracy != null) {
-                        Text(
-                            text = "精度 %.0f米".format(event.accuracy),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = buildString {
+                            append("%.6f, %.6f".format(event.latitude, event.longitude))
+                            if (event.accuracy != null) {
+                                append(" · 精度 %.0f米".format(event.accuracy))
+                            }
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 Text(
-                    text = SimpleDateFormat("HH:mm", Locale.getDefault())
+                    text = SimpleDateFormat("MM/dd", Locale.getDefault())
                         .format(Date(event.timestamp)),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -480,4 +467,79 @@ private fun LocationPointItem(
             }
         }
     }
+}
+
+@Composable
+private fun TrackSummaryBar(
+    totalCount: Int,
+    pendingCount: Int,
+    reportedCount: Int
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TrackSummaryItem(
+                label = "轨迹点",
+                value = totalCount.toString(),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            TrackSummaryItem(
+                label = "待上报",
+                value = pendingCount.toString(),
+                color = Warning
+            )
+            TrackSummaryItem(
+                label = "已上报",
+                value = reportedCount.toString(),
+                color = LocationColor
+            )
+        }
+    }
+}
+
+@Composable
+private fun RowScope.TrackSummaryItem(
+    label: String,
+    value: String,
+    color: androidx.compose.ui.graphics.Color
+) {
+    Column(
+        modifier = Modifier.weight(1f),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleMedium,
+            color = color,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+private fun formatTrackTime(timestamp: Long): String {
+    val today = java.util.Calendar.getInstance()
+    val target = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
+    val prefix = if (
+        today.get(java.util.Calendar.YEAR) == target.get(java.util.Calendar.YEAR) &&
+        today.get(java.util.Calendar.DAY_OF_YEAR) == target.get(java.util.Calendar.DAY_OF_YEAR)
+    ) {
+        "今天"
+    } else {
+        SimpleDateFormat("M月d日", Locale.getDefault()).format(Date(timestamp))
+    }
+    return "$prefix ${SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))}"
 }

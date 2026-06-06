@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 108 108">
+  <!-- 背景圆形 -->
+  <circle cx="54" cy="54" r="50" fill="#E0F2F1" />
+  <!-- 盾牌外层 -->
+  <path d="M54,24 L76,34 L76,56 C76,70 66,78 54,84 C42,78 32,70 32,56 L32,34 Z" fill="#004D40" />
+  <!-- 盾牌主体 -->
+  <path d="M54,26 L74,35 L74,56 C74,69 65,77 54,82 C43,77 34,69 34,56 L34,35 Z" fill="#00897B" />
+  <!-- 盾牌内部 -->
+  <path d="M54,30 L70,38 L70,56 C70,66 62,73 54,78 C46,73 38,66 38,56 L38,38 Z" fill="#4DB6AC" />
+  <!-- 对勾 -->
+  <path d="M44,55 L51,62 L64,48" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
