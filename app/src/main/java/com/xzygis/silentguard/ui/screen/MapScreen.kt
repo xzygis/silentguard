@@ -21,21 +21,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -379,9 +370,6 @@ fun MapScreen(dao: MonitorEventDao) {
     val locations by dao.getLocationEventsBetween(startTime, Long.MAX_VALUE)
         .collectAsState(initial = emptyList())
 
-    val recordedCount = locations.count { it.status == EventStatus.PENDING }
-    val reportedCount = locations.count { it.status == EventStatus.SENT }
-
     LaunchedEffect(locations, aMapInstance, isMapLoaded) {
         val map = aMapInstance ?: return@LaunchedEffect
         if (isMapLoaded) {
@@ -424,31 +412,38 @@ fun MapScreen(dao: MonitorEventDao) {
         Surface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-            shadowElevation = 4.dp
+                .padding(top = 12.dp),
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            shadowElevation = 2.dp
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 TimeRange.entries.forEach { range ->
-                    FilterChip(
-                        selected = selectedRange == range,
-                        onClick = { selectedRange = range },
-                        label = {
-                            Text(
-                                text = range.label,
-                                style = MaterialTheme.typography.labelLarge
+                    val selected = selectedRange == range
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                if (selected) {
+                                    LocationColor.copy(alpha = 0.14f)
+                                } else {
+                                    androidx.compose.ui.graphics.Color.Transparent
+                                }
                             )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = LocationColor,
-                            selectedLabelColor = OnPrimary
-                        ),
-                        shape = RoundedCornerShape(10.dp)
-                    )
+                            .clickable { selectedRange = range }
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = range.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (selected) LocationColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                    }
                 }
             }
         }
@@ -479,236 +474,7 @@ fun MapScreen(dao: MonitorEventDao) {
                     )
                 }
             }
-        } else {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                shadowElevation = 6.dp
-            ) {
-                Column(modifier = Modifier.padding(vertical = 12.dp)) {
-                    TrackSummaryBar(
-                        totalCount = locations.size,
-                        pendingCount = recordedCount,
-                        reportedCount = reportedCount
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 240.dp)
-                            .padding(horizontal = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        itemsIndexed(locations, key = { _, e -> e.id }) { index, event ->
-                            LocationPointItem(
-                                event = event,
-                                isFirst = index == 0,
-                                isLast = index == locations.lastIndex,
-                                onClick = {
-                                    // 点击跳转到高德地图 App（如已安装）或网页版
-                                    val latLng = event.toAmapLatLng(context)
-                                    val uri = Uri.parse(
-                                        if (latLng != null) {
-                                            "https://uri.amap.com/marker?position=${latLng.longitude},${latLng.latitude}&name=轨迹点"
-                                        } else {
-                                            "https://uri.amap.com/marker?position=${event.longitude},${event.latitude}&name=轨迹点"
-                                        }
-                                    )
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-                                }
-                            )
-                        }
-                        item { Spacer(modifier = Modifier.height(4.dp)) }
-                    }
-                }
-            }
         }
-    }
-}
-
-@Composable
-private fun LocationPointItem(
-    event: MonitorEvent,
-    isFirst: Boolean,
-    isLast: Boolean,
-    onClick: () -> Unit
-) {
-    val timelineColor = when (event.status) {
-        EventStatus.SENT -> LocationColor
-        EventStatus.FAILED -> Error
-        EventStatus.PENDING -> Warning
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        // 时间轴线
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.width(32.dp)
-        ) {
-            if (!isFirst) {
-                Box(
-                    modifier = Modifier
-                        .width(2.dp)
-                        .height(12.dp)
-                        .background(timelineColor.copy(alpha = 0.3f))
-                )
-            } else {
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            Box(
-                modifier = Modifier
-                    .size(if (isFirst || isLast) 10.dp else 6.dp)
-                    .clip(CircleShape)
-                    .background(if (isFirst || isLast) timelineColor else timelineColor.copy(alpha = 0.5f))
-            )
-
-            if (!isLast) {
-                Box(
-                    modifier = Modifier
-                        .width(2.dp)
-                        .height(12.dp)
-                        .background(timelineColor.copy(alpha = 0.3f))
-                )
-            } else {
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-        }
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        Surface(
-            modifier = Modifier
-                .weight(1f)
-                .padding(bottom = 4.dp),
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Row(
-                modifier = Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = formatTrackTime(event.timestamp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Medium
-                        )
-                        // 状态标签
-                        val statusColor = when (event.status) {
-                            EventStatus.SENT -> LocationColor
-                            EventStatus.FAILED -> Error
-                            else -> Warning
-                        }
-                        val statusText = when (event.status) {
-                            EventStatus.SENT -> "已发送"
-                            EventStatus.FAILED -> "发送失败"
-                            else -> "待发送"
-                        }
-                        Text(
-                            text = statusText,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = statusColor,
-                            modifier = Modifier
-                                .background(
-                                    color = statusColor.copy(alpha = 0.1f),
-                                    shape = RoundedCornerShape(4.dp)
-                                )
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                    Text(
-                        text = "${event.title.ifBlank { "位置记录" }} · 点击在高德地图中打开",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Text(
-                    text = SimpleDateFormat("MM/dd", Locale.getDefault())
-                        .format(Date(event.timestamp)),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun TrackSummaryBar(
-    totalCount: Int,
-    pendingCount: Int,
-    reportedCount: Int
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surface
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TrackSummaryItem(
-                label = "轨迹点",
-                value = totalCount.toString(),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            TrackSummaryItem(
-                label = "待发送",
-                value = pendingCount.toString(),
-                color = Warning
-            )
-            TrackSummaryItem(
-                label = "已发送",
-                value = reportedCount.toString(),
-                color = LocationColor
-            )
-        }
-    }
-}
-
-@Composable
-private fun RowScope.TrackSummaryItem(
-    label: String,
-    value: String,
-    color: androidx.compose.ui.graphics.Color
-) {
-    Column(
-        modifier = Modifier.weight(1f),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleMedium,
-            color = color,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
