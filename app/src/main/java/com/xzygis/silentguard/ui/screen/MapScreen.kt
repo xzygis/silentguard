@@ -79,13 +79,6 @@ private enum class TimeRange(val label: String, val hours: Int) {
     ALL("全部", -1)
 }
 
-private enum class TrackStatusFilter(val label: String, val status: EventStatus?) {
-    ALL("全部", null),
-    PENDING("待发送", EventStatus.PENDING),
-    SENT("已发送", EventStatus.SENT),
-    FAILED("失败", EventStatus.FAILED)
-}
-
 private data class TrackMarkerInfo(
     val title: String,
     val status: String,
@@ -366,7 +359,6 @@ private fun isNearLastLocation(location: Location, lastEvent: MonitorEvent?): Bo
 @Composable
 fun MapScreen(dao: MonitorEventDao) {
     var selectedRange by remember { mutableStateOf(TimeRange.TODAY) }
-    var selectedStatus by remember { mutableStateOf(TrackStatusFilter.ALL) }
     val context = LocalContext.current
     var aMapInstance by remember { mutableStateOf<AMap?>(null) }
     var isMapLoaded by remember { mutableStateOf(false) }
@@ -439,16 +431,11 @@ fun MapScreen(dao: MonitorEventDao) {
 
     val locations by dao.getLocationEventsBetween(startTime, Long.MAX_VALUE)
         .collectAsState(initial = emptyList())
-    val visibleLocations = remember(locations, selectedStatus) {
-        selectedStatus.status?.let { status ->
-            locations.filter { it.status == status }
-        } ?: locations
-    }
 
-    LaunchedEffect(visibleLocations, aMapInstance, isMapLoaded) {
+    LaunchedEffect(locations, aMapInstance, isMapLoaded) {
         val map = aMapInstance ?: return@LaunchedEffect
         if (isMapLoaded) {
-            renderTrackOnMap(map, context, visibleLocations)
+            renderTrackOnMap(map, context, locations)
         }
     }
 
@@ -477,7 +464,7 @@ fun MapScreen(dao: MonitorEventDao) {
                 }
                 map.setOnMapLoadedListener {
                     isMapLoaded = true
-                    renderTrackOnMap(map, context, visibleLocations)
+                    renderTrackOnMap(map, context, locations)
                 }
                 aMapInstance = map
             }
@@ -522,46 +509,7 @@ fun MapScreen(dao: MonitorEventDao) {
             }
         }
 
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 64.dp),
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-            shadowElevation = 2.dp
-        ) {
-            Row(
-                modifier = Modifier.padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                TrackStatusFilter.entries.forEach { filter ->
-                    val selected = selectedStatus == filter
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(
-                                if (selected) {
-                                    Accent.copy(alpha = 0.14f)
-                                } else {
-                                    androidx.compose.ui.graphics.Color.Transparent
-                                }
-                            )
-                            .clickable { selectedStatus = filter }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = filter.label,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (selected) Accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-                        )
-                    }
-                }
-            }
-        }
-
-        if (visibleLocations.isEmpty()) {
+        if (locations.isEmpty()) {
             Surface(
                 modifier = Modifier
                     .align(Alignment.Center)
@@ -581,7 +529,7 @@ fun MapScreen(dao: MonitorEventDao) {
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = if (locations.isEmpty()) "正在获取位置信息..." else "当前筛选条件下没有轨迹点",
+                        text = "正在获取位置信息...",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
