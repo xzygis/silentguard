@@ -52,7 +52,16 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Debug APK
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > ${{ github.workspace }}/release.jks
+
+      - name: Build Release APK
+        env:
+          KEYSTORE_FILE: ${{ github.workspace }}/release.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           VERSION=${{ steps.version.outputs.TAG }}
           VERSION_NUM=${VERSION#v}
@@ -60,7 +69,7 @@ jobs:
           MINOR=$(echo "$VERSION_NUM" | cut -d. -f2)
           PATCH=$(echo "$VERSION_NUM" | cut -d. -f3)
           CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
-          ./gradlew assembleDebug -PVERSION_CODE=$CODE -PVERSION_NAME=$VERSION_NUM
+          ./gradlew assembleRelease -PVERSION_CODE=$CODE -PVERSION_NAME=$VERSION_NUM
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -78,6 +87,6 @@ jobs:
             3. 打开文件安装（需允许"安装未知应用"）
 
             > 最低支持 Android 8.0 (API 26)
-          files: app/build/outputs/apk/debug/silentguard-*.apk
+          files: app/build/outputs/apk/release/silentguard-*.apk
           draft: false
           prerelease: false
