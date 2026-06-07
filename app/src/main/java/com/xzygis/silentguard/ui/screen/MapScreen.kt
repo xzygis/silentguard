@@ -363,7 +363,7 @@ fun MapScreen(dao: MonitorEventDao) {
     var aMapInstance by remember { mutableStateOf<AMap?>(null) }
     var isMapLoaded by remember { mutableStateOf(false) }
 
-    // 打开页面时立即获取一次当前位置并记录
+    // 打开页面时立即获取一次当前位置并记录（受定位间隔节流保护）
     LaunchedEffect(Unit) {
         val hasPermission = ContextCompat.checkSelfPermission(
             context, android.Manifest.permission.ACCESS_FINE_LOCATION
@@ -373,15 +373,25 @@ fun MapScreen(dao: MonitorEventDao) {
 
         if (hasPermission) {
             try {
+                // 时间节流：如果最近一次位置记录在配置间隔内，跳过本次定位
+                val config = AppConfig(context).getConfig()
+                val latestLocation = dao.getLatestLocationEvent()
+                if (latestLocation != null) {
+                    val timeSinceLastRecord = System.currentTimeMillis() - latestLocation.timestamp
+                    val minIntervalMillis = config.locationIntervalMinutes * 60 * 1000L
+                    if (timeSinceLastRecord < minIntervalMillis) {
+                        Log.d("MapScreen", "距上次记录仅${timeSinceLastRecord / 1000}秒，未超过${config.locationIntervalMinutes}分钟间隔，跳过页面定位")
+                        return@LaunchedEffect
+                    }
+                }
+
                 val location = getCurrentDeviceLocation(context)
                 if (location != null) {
-                    val latestLocation = dao.getLatestLocationEvent()
                     if (isNearLastLocation(location, latestLocation)) {
                         Log.d("MapScreen", "位置变化不足${LOCATION_DEDUP_DISTANCE_METERS}米，跳过页面打开记录")
                         return@LaunchedEffect
                     }
 
-                    val config = AppConfig(context).getConfig()
                     val address = AmapReverseGeocoder.resolveAddress(
                         context = context,
                         apiKey = config.amapWebApiKey,
