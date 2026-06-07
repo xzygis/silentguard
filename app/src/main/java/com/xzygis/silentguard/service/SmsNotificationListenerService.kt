@@ -59,6 +59,12 @@ class SmsNotificationListenerService : NotificationListenerService() {
         val pkg = sbn.packageName ?: return
         if (!isAllowedSmsPackage(pkg)) return
 
+        // 如果 RECEIVE_SMS 权限已授予，SmsReceiver 会直接处理短信，此处跳过避免重复
+        if (ContextCompat.checkSelfPermission(applicationContext, android.Manifest.permission.RECEIVE_SMS)
+            == PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+
         // 过滤掉 ongoing 类型的通知（如"正在运行"、前台服务通知）
         if (sbn.isOngoing) {
             Log.d(TAG, "跳过 ongoing 通知: $pkg")

@@ -41,6 +41,7 @@ import com.xzygis.silentguard.config.MonitorConfig
 import com.xzygis.silentguard.data.AppDatabase
 import com.xzygis.silentguard.mail.MailSender
 import com.xzygis.silentguard.service.MonitorForegroundService
+import com.xzygis.silentguard.util.BackgroundGuideHelper
 import com.xzygis.silentguard.service.SmsNotificationListenerService
 import com.xzygis.silentguard.ui.navigation.Screen
 import com.xzygis.silentguard.ui.screen.ActivityLogScreen
@@ -225,6 +226,11 @@ class MainActivity : ComponentActivity() {
                 startService(serviceIntent)
             }
             Toast.makeText(this, "守护已启动", Toast.LENGTH_SHORT).show()
+
+            // 首次启动守护时，在国产 ROM 上引导用户开启后台运行权限
+            if (BackgroundGuideHelper.shouldShowGuide(this)) {
+                BackgroundGuideHelper.showGuideDialog(this)
+            }
         } else {
             stopService(serviceIntent)
             Toast.makeText(this, "守护已停止", Toast.LENGTH_SHORT).show()
