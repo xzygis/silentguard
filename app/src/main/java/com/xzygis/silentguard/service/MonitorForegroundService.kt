@@ -1,25 +1,26 @@
 package com.xzygis.silentguard.service
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Build
 import android.os.IBinder
-import android.os.Looper
+import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.xzygis.silentguard.MainActivity
 import com.xzygis.silentguard.R
 import com.xzygis.silentguard.config.AppConfig
@@ -29,6 +30,7 @@ import com.xzygis.silentguard.data.EventType
 import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.location.AmapReverseGeocoder
 import com.xzygis.silentguard.mail.EmailScheduleWorker
+import com.xzygis.silentguard.receiver.ServiceWatchdogReceiver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,6 +39,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -55,36 +58,61 @@ class MonitorForegroundService : Service() {
     }
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
-    private lateinit var locationCallback: LocationCallback
     private lateinit var appConfig: AppConfig
+    private lateinit var wakeLock: PowerManager.WakeLock
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastRecordedLocation: Location? = null
-    private var lastLocationCallbackTime: Long = 0L
+    private var isLocationLoopRunning = false
 
     override fun onCreate() {
         super.onCreate()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         appConfig = AppConfig(this)
         createNotificationChannel()
+        acquireWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = buildNotification()
         startForeground(NOTIFICATION_ID, notification)
-        startLocationUpdates()
-        startEmailScheduler()
-        startEmailCheckLoop()
+        // 防止 START_STICKY 重启或重复调用导致多个循环并发
+        if (!isLocationLoopRunning) {
+            isLocationLoopRunning = true
+            startLocationPollingLoop()
+            startEmailScheduler()
+            startEmailCheckLoop()
+        }
+        // 设置 AlarmManager 兜底唤醒
+        scheduleWatchdogAlarm()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * 用户从最近任务划掉 app 时触发，立即重启服务
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.d(TAG, "onTaskRemoved: 用户划掉任务，尝试重启服务")
+        // 通过 AlarmManager 延迟 1 秒重启服务
+        val restartIntent = Intent(this, ServiceWatchdogReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, 1, restartIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.setExactAndAllowWhileIdle(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SystemClock.elapsedRealtime() + 1000,
+            pendingIntent
+        )
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        if (::locationCallback.isInitialized) {
-            fusedLocationClient.removeLocationUpdates(locationCallback)
-        }
         EmailScheduleWorker.cancel(this)
+        releaseWakeLock()
         serviceScope.cancel()
     }
 
@@ -124,150 +152,126 @@ class MonitorForegroundService : Service() {
         return hour >= NIGHT_START_HOUR || hour < NIGHT_END_HOUR
     }
 
-    private fun startLocationUpdates() {
+    /**
+     * 间歇式定位循环：每个周期执行一次 getCurrentLocation，完成后释放定位资源。
+     * 系统不会认为 app 持续占用 GPS，避免小米等系统显示"正在使用定位"。
+     */
+    private fun startLocationPollingLoop() {
         serviceScope.launch {
             try {
                 val config = appConfig.configFlow.first()
-                Log.d(TAG, "启动位置更新: 间隔=${config.locationIntervalMinutes}分钟, 高精度=${config.useHighAccuracy}")
-                requestLocationWithConfig(config.locationIntervalMinutes, config.useHighAccuracy)
-                observeDayNightSwitch(config.locationIntervalMinutes, config.useHighAccuracy)
+                val baseIntervalMinutes = config.locationIntervalMinutes
+                val useHighAccuracy = config.useHighAccuracy
+                Log.d(TAG, "启动间歇式定位循环: 基础间隔=${baseIntervalMinutes}分钟, 高精度=$useHighAccuracy")
+
+                while (isActive) {
+                    val actualInterval = if (isNightTime()) {
+                        maxOf(baseIntervalMinutes, NIGHT_INTERVAL_MINUTES)
+                    } else {
+                        baseIntervalMinutes
+                    }
+
+                    fetchAndRecordLocation(useHighAccuracy)
+
+                    val delayMillis = actualInterval * 60 * 1000L
+                    Log.d(TAG, "下次定位将在 ${actualInterval} 分钟后 (夜间=${isNightTime()})")
+                    delay(delayMillis)
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "启动位置更新失败: ${e.message}", e)
+                Log.e(TAG, "定位循环异常: ${e.message}", e)
+                isLocationLoopRunning = false
                 // 延迟重试
                 delay(30_000L)
-                Log.d(TAG, "尝试重新启动位置更新...")
-                startLocationUpdates()
+                if (!isLocationLoopRunning) {
+                    isLocationLoopRunning = true
+                    startLocationPollingLoop()
+                }
             }
         }
     }
 
-    private fun requestLocationWithConfig(baseIntervalMinutes: Int, useHighAccuracy: Boolean) {
-        if (::locationCallback.isInitialized) {
-            fusedLocationClient.removeLocationUpdates(locationCallback)
-        }
-
-        val actualInterval = if (isNightTime()) {
-            maxOf(baseIntervalMinutes, NIGHT_INTERVAL_MINUTES)
-        } else {
-            baseIntervalMinutes
-        }
-        val intervalMillis = actualInterval * 60 * 1000L
-
-        val priority = if (useHighAccuracy) {
-            Priority.PRIORITY_HIGH_ACCURACY
-        } else {
-            Priority.PRIORITY_BALANCED_POWER_ACCURACY
-        }
-
-        val locationRequest = LocationRequest.Builder(priority, intervalMillis)
-            .setMinUpdateIntervalMillis(intervalMillis)
-            .setMinUpdateDistanceMeters(50f)
-            .build()
-
-        locationCallback = object : LocationCallback() {
-            override fun onLocationResult(result: LocationResult) {
-                val location = result.lastLocation ?: return
-                lastLocationCallbackTime = System.currentTimeMillis()
-
-                // 位置重复过滤：距离上次记录 < 100m 则跳过
-                lastRecordedLocation?.let { last ->
-                    if (last.distanceTo(location) < DEDUP_DISTANCE_METERS) {
-                        Log.d(TAG, "位置变化不足${DEDUP_DISTANCE_METERS}米，跳过记录")
-                        return
-                    }
-                }
-
-                serviceScope.launch {
-                    try {
-                        val config = appConfig.getConfig()
-                        val address = AmapReverseGeocoder.resolveAddress(
-                            context = this@MonitorForegroundService,
-                            apiKey = config.amapWebApiKey,
-                            latitude = location.latitude,
-                            longitude = location.longitude
-                        )
-                        val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                        val currentTime = timeFormat.format(Date())
-                        val mapsLink = "https://maps.google.com/maps?q=${location.latitude},${location.longitude}"
-
-                        val body = buildString {
-                            if (address != null) appendLine("地址: $address")
-                            appendLine("经度: ${location.longitude}")
-                            appendLine("纬度: ${location.latitude}")
-                            appendLine("精度: ${location.accuracy}米")
-                            appendLine("时间: $currentTime")
-                            appendLine("Google Maps: $mapsLink")
-                        }
-
-                        val event = MonitorEvent(
-                            type = EventType.LOCATION,
-                            title = "位置记录",
-                            summary = AmapReverseGeocoder.formatSummary(
-                                address,
-                                location.latitude,
-                                location.longitude
-                            ),
-                            detail = body,
-                            latitude = location.latitude,
-                            longitude = location.longitude,
-                            accuracy = location.accuracy,
-                            status = EventStatus.PENDING
-                        )
-                        val dao = AppDatabase.getInstance(this@MonitorForegroundService).monitorEventDao()
-                        dao.insert(event)
-                        lastRecordedLocation = location
-                    } catch (e: Exception) {
-                        Log.e(TAG, "记录位置事件失败: ${e.message}", e)
-                    }
-                }
-            }
-        }
-
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.ACCESS_COARSE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
+    /**
+     * 单次定位 + 去重 + 记录
+     */
+    private suspend fun fetchAndRecordLocation(useHighAccuracy: Boolean) {
+        if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED &&
+            ActivityCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_COARSE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED
         ) {
-            fusedLocationClient.requestLocationUpdates(
-                locationRequest,
-                locationCallback,
-                Looper.getMainLooper()
-            )
-            Log.d(TAG, "位置更新已启动: 间隔=${actualInterval}分钟, 高精度=$useHighAccuracy, 夜间=${isNightTime()}")
-        } else {
-            Log.w(TAG, "缺少位置权限，无法请求位置更新")
+            Log.w(TAG, "缺少位置权限，跳过本次定位")
+            return
         }
-    }
 
-    private fun observeDayNightSwitch(baseIntervalMinutes: Int, useHighAccuracy: Boolean) {
-        serviceScope.launch {
-            var wasNight = isNightTime()
-            while (isActive) {
-                delay(5 * 60 * 1000L) // 每 5 分钟检查一次
-                val isNight = isNightTime()
-                if (isNight != wasNight) {
-                    Log.d(TAG, "昼夜切换: ${if (isNight) "进入夜间模式" else "进入日间模式"}")
-                    requestLocationWithConfig(baseIntervalMinutes, useHighAccuracy)
-                    wasNight = isNight
-                }
+        try {
+            val priority = if (useHighAccuracy) {
+                Priority.PRIORITY_HIGH_ACCURACY
+            } else {
+                Priority.PRIORITY_BALANCED_POWER_ACCURACY
+            }
 
-                // Watchdog: 如果超过预期间隔的 3 倍仍无回调，重新注册定位
-                val expectedInterval = if (isNight) {
-                    maxOf(baseIntervalMinutes, NIGHT_INTERVAL_MINUTES)
-                } else {
-                    baseIntervalMinutes
-                }
-                val watchdogThreshold = expectedInterval * 60 * 1000L * 3
-                if (lastLocationCallbackTime > 0 &&
-                    System.currentTimeMillis() - lastLocationCallbackTime > watchdogThreshold
-                ) {
-                    Log.w(TAG, "位置回调超时(${watchdogThreshold / 60000}分钟无回调)，重新注册定位请求")
-                    requestLocationWithConfig(baseIntervalMinutes, useHighAccuracy)
+            val cancellationToken = CancellationTokenSource()
+            val location: Location? = try {
+                fusedLocationClient.getCurrentLocation(priority, cancellationToken.token).await()
+            } catch (e: Exception) {
+                Log.w(TAG, "getCurrentLocation 失败，尝试 lastLocation: ${e.message}")
+                fusedLocationClient.lastLocation.await()
+            }
+
+            if (location == null) {
+                Log.w(TAG, "无法获取位置")
+                return
+            }
+
+            // 去重：距离上次记录不足 100 米则跳过
+            lastRecordedLocation?.let { last ->
+                if (last.distanceTo(location) < DEDUP_DISTANCE_METERS) {
+                    Log.d(TAG, "位置变化不足${DEDUP_DISTANCE_METERS}米，跳过记录")
+                    return
                 }
             }
+
+            // 记录位置
+            val config = appConfig.getConfig()
+            val address = AmapReverseGeocoder.resolveAddress(
+                context = this@MonitorForegroundService,
+                apiKey = config.amapWebApiKey,
+                latitude = location.latitude,
+                longitude = location.longitude
+            )
+            val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+            val currentTime = timeFormat.format(Date())
+            val mapsLink = "https://maps.google.com/maps?q=${location.latitude},${location.longitude}"
+
+            val body = buildString {
+                if (address != null) appendLine("地址: $address")
+                appendLine("经度: ${location.longitude}")
+                appendLine("纬度: ${location.latitude}")
+                appendLine("精度: ${location.accuracy}米")
+                appendLine("时间: $currentTime")
+                appendLine("Google Maps: $mapsLink")
+            }
+
+            val event = MonitorEvent(
+                type = EventType.LOCATION,
+                title = "位置记录",
+                summary = AmapReverseGeocoder.formatSummary(
+                    address,
+                    location.latitude,
+                    location.longitude
+                ),
+                detail = body,
+                latitude = location.latitude,
+                longitude = location.longitude,
+                accuracy = location.accuracy,
+                status = EventStatus.PENDING
+            )
+            val dao = AppDatabase.getInstance(this@MonitorForegroundService).monitorEventDao()
+            dao.insert(event)
+            lastRecordedLocation = location
+            Log.d(TAG, "位置已记录: ${location.latitude}, ${location.longitude}")
+        } catch (e: Exception) {
+            Log.e(TAG, "定位记录失败: ${e.message}", e)
         }
     }
 
@@ -321,5 +325,50 @@ class MonitorForegroundService : Service() {
                 Log.e(TAG, "邮件检查循环启动失败: ${e.message}", e)
             }
         }
+    }
+
+    /**
+     * 获取 WakeLock，防止 CPU 休眠导致定位协程暂停
+     */
+    private fun acquireWakeLock() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "SilentGuard::LocationWakeLock"
+        ).apply {
+            acquire(24 * 60 * 60 * 1000L) // 最长 24 小时，服务存活期间持有
+        }
+        Log.d(TAG, "WakeLock 已获取")
+    }
+
+    /**
+     * 释放 WakeLock
+     */
+    private fun releaseWakeLock() {
+        if (::wakeLock.isInitialized && wakeLock.isHeld) {
+            wakeLock.release()
+            Log.d(TAG, "WakeLock 已释放")
+        }
+    }
+
+    /**
+     * 设置 AlarmManager 兜底唤醒。
+     * 每隔 15 分钟检查一次服务是否存活，如果服务被杀则重启。
+     */
+    private fun scheduleWatchdogAlarm() {
+        val intent = Intent(this, ServiceWatchdogReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        // 每 15 分钟触发一次兜底检查
+        alarmManager.setRepeating(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SystemClock.elapsedRealtime() + 15 * 60 * 1000L,
+            15 * 60 * 1000L,
+            pendingIntent
+        )
+        Log.d(TAG, "AlarmManager 兜底唤醒已设置: 每15分钟检查一次")
     }
 }

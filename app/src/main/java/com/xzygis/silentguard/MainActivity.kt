@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
         mailSender = MailSender(this)
 
         requestPermissions()
+        restoreGuardingIfNeeded()
 
         setContent {
             SilentGuardTheme {
@@ -207,6 +208,23 @@ class MainActivity : ComponentActivity() {
                         isGuarding = config.isGuardingEnabled,
                         onToggleGuarding = { toggleGuarding(it) }
                     )
+                }
+            }
+        }
+    }
+
+    /**
+     * App 启动时检查守护状态，如果之前已开启则自动恢复服务
+     */
+    private fun restoreGuardingIfNeeded() {
+        kotlinx.coroutines.MainScope().launch {
+            val config = appConfig.getConfig()
+            if (config.isGuardingEnabled) {
+                val serviceIntent = Intent(this@MainActivity, MonitorForegroundService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
                 }
             }
         }
