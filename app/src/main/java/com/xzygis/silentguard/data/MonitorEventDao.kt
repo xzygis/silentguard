@@ -54,6 +54,9 @@ interface MonitorEventDao {
     @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND status = 'PENDING' ORDER BY timestamp ASC")
     suspend fun getPendingLocationEvents(): List<MonitorEvent>
 
+    @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND latitude IS NOT NULL AND timestamp >= :startOfDay ORDER BY timestamp ASC")
+    suspend fun getTodayLocationEvents(startOfDay: Long): List<MonitorEvent>
+
     @Query("DELETE FROM monitor_events")
     suspend fun clearAll()
 }
