@@ -63,13 +63,16 @@ class MonitorForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastRecordedLocation: Location? = null
     private var isLocationLoopRunning = false
+    // 自适应间隔：连续未移动次数
+    private var stationaryCount = 0
+    private val MAX_INTERVAL_MULTIPLIER = 4
 
     override fun onCreate() {
         super.onCreate()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         appConfig = AppConfig(this)
         createNotificationChannel()
-        acquireWakeLock()
+        initWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -154,7 +157,8 @@ class MonitorForegroundService : Service() {
 
     /**
      * 间歇式定位循环：每个周期执行一次 getCurrentLocation，完成后释放定位资源。
-     * 系统不会认为 app 持续占用 GPS，避免小米等系统显示"正在使用定位"。
+     * 自适应间隔：设备静止时逐步延长间隔（最大4倍），移动时立即恢复正常间隔。
+     * 夜间自动切换低功耗定位精度。
      */
     private fun startLocationPollingLoop() {
         serviceScope.launch {
@@ -165,16 +169,34 @@ class MonitorForegroundService : Service() {
                 Log.d(TAG, "启动间歇式定位循环: 基础间隔=${baseIntervalMinutes}分钟, 高精度=$useHighAccuracy")
 
                 while (isActive) {
-                    val actualInterval = if (isNightTime()) {
+                    // 夜间自动延长基础间隔
+                    val nightAdjusted = if (isNightTime()) {
                         maxOf(baseIntervalMinutes, NIGHT_INTERVAL_MINUTES)
                     } else {
                         baseIntervalMinutes
                     }
 
-                    fetchAndRecordLocation(useHighAccuracy)
+                    // 自适应间隔：静止时逐步翻倍，最大4倍
+                    val multiplier = minOf(1 shl stationaryCount, MAX_INTERVAL_MULTIPLIER)
+                    val actualInterval = nightAdjusted * multiplier
+
+                    // 夜间自动使用低功耗定位
+                    val effectiveHighAccuracy = if (isNightTime()) false else useHighAccuracy
+
+                    // 仅在定位期间持有 WakeLock
+                    acquireWakeLock()
+                    val moved = fetchAndRecordLocation(effectiveHighAccuracy)
+                    releaseWakeLock()
+
+                    // 更新静止计数
+                    if (moved) {
+                        stationaryCount = 0
+                    } else {
+                        stationaryCount = minOf(stationaryCount + 1, 3) // 最大2^3=8，但被MAX_INTERVAL_MULTIPLIER限制为4
+                    }
 
                     val delayMillis = actualInterval * 60 * 1000L
-                    Log.d(TAG, "下次定位将在 ${actualInterval} 分钟后 (夜间=${isNightTime()})")
+                    Log.d(TAG, "下次定位将在 ${actualInterval} 分钟后 (夜间=${isNightTime()}, 静止次数=$stationaryCount, 倍率=$multiplier)")
                     delay(delayMillis)
                 }
             } catch (e: Exception) {
@@ -192,15 +214,16 @@ class MonitorForegroundService : Service() {
 
     /**
      * 单次定位 + 去重 + 记录
+     * @return true 表示位置有变化（已记录），false 表示位置未变化或获取失败
      */
-    private suspend fun fetchAndRecordLocation(useHighAccuracy: Boolean) {
+    private suspend fun fetchAndRecordLocation(useHighAccuracy: Boolean): Boolean {
         if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED &&
             ActivityCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_COARSE_LOCATION)
             != PackageManager.PERMISSION_GRANTED
         ) {
             Log.w(TAG, "缺少位置权限，跳过本次定位")
-            return
+            return false
         }
 
         try {
@@ -220,14 +243,14 @@ class MonitorForegroundService : Service() {
 
             if (location == null) {
                 Log.w(TAG, "无法获取位置")
-                return
+                return false
             }
 
             // 去重：距离上次记录不足 100 米则跳过
             lastRecordedLocation?.let { last ->
                 if (last.distanceTo(location) < DEDUP_DISTANCE_METERS) {
                     Log.d(TAG, "位置变化不足${DEDUP_DISTANCE_METERS}米，跳过记录")
-                    return
+                    return false
                 }
             }
 
@@ -270,8 +293,10 @@ class MonitorForegroundService : Service() {
             dao.insert(event)
             lastRecordedLocation = location
             Log.d(TAG, "位置已记录: ${location.latitude}, ${location.longitude}")
+            return true
         } catch (e: Exception) {
             Log.e(TAG, "定位记录失败: ${e.message}", e)
+            return false
         }
     }
 
@@ -328,17 +353,24 @@ class MonitorForegroundService : Service() {
     }
 
     /**
-     * 获取 WakeLock，防止 CPU 休眠导致定位协程暂停
+     * 初始化 WakeLock 实例（不立即 acquire）
      */
-    private fun acquireWakeLock() {
+    private fun initWakeLock() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "SilentGuard::LocationWakeLock"
-        ).apply {
-            acquire(24 * 60 * 60 * 1000L) // 最长 24 小时，服务存活期间持有
+        )
+        Log.d(TAG, "WakeLock 已初始化（按需获取模式）")
+    }
+
+    /**
+     * 按需获取 WakeLock（仅在定位期间持有，最长 30 秒超时保护）
+     */
+    private fun acquireWakeLock() {
+        if (::wakeLock.isInitialized && !wakeLock.isHeld) {
+            wakeLock.acquire(30_000L) // 最长 30 秒自动释放，防止泄漏
         }
-        Log.d(TAG, "WakeLock 已获取")
     }
 
     /**
@@ -347,28 +379,31 @@ class MonitorForegroundService : Service() {
     private fun releaseWakeLock() {
         if (::wakeLock.isInitialized && wakeLock.isHeld) {
             wakeLock.release()
-            Log.d(TAG, "WakeLock 已释放")
         }
     }
 
     /**
      * 设置 AlarmManager 兜底唤醒。
-     * 每隔 15 分钟检查一次服务是否存活，如果服务被杀则重启。
+     * 间隔跟随用户定位设置：兜底间隔 = 定位间隔 * 2（至少 10 分钟）
      */
     private fun scheduleWatchdogAlarm() {
-        val intent = Intent(this, ServiceWatchdogReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        // 每 15 分钟触发一次兜底检查
-        alarmManager.setRepeating(
-            AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            SystemClock.elapsedRealtime() + 15 * 60 * 1000L,
-            15 * 60 * 1000L,
-            pendingIntent
-        )
-        Log.d(TAG, "AlarmManager 兜底唤醒已设置: 每15分钟检查一次")
+        serviceScope.launch {
+            val config = appConfig.configFlow.first()
+            val watchdogIntervalMs = maxOf(config.locationIntervalMinutes * 2, 10) * 60 * 1000L
+
+            val intent = Intent(this@MonitorForegroundService, ServiceWatchdogReceiver::class.java)
+            val pendingIntent = PendingIntent.getBroadcast(
+                this@MonitorForegroundService, 0, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            alarmManager.setRepeating(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + watchdogIntervalMs,
+                watchdogIntervalMs,
+                pendingIntent
+            )
+            Log.d(TAG, "AlarmManager 兜底唤醒已设置: 每${watchdogIntervalMs / 60000}分钟检查一次")
+        }
     }
 }
