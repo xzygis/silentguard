@@ -231,7 +231,7 @@ private fun renderTrackOnMap(
             EventStatus.FAILED -> AndroidColor.parseColor("#DC2626")
             EventStatus.PENDING -> AndroidColor.parseColor("#F59E0B")
         }
-        val sequence = mapLocations.size - index
+        val sequence = index + 1
         val timeText = formatTrackTime(event.timestamp)
         val coordinateText = "坐标: %.6f, %.6f".format(event.latitude, event.longitude)
         val accuracyText = "精度: ${event.accuracy?.let { "%.0f米".format(it) } ?: "未知"}"
@@ -432,15 +432,17 @@ fun MapScreen(dao: MonitorEventDao) {
         }
     }
 
-    val now = System.currentTimeMillis()
-    val startTime = if (selectedRange.hours > 0) {
-        now - selectedRange.hours * 3600_000L
-    } else {
-        0L
+    val startTime = remember(selectedRange) {
+        if (selectedRange.hours > 0) {
+            System.currentTimeMillis() - selectedRange.hours * 3600_000L
+        } else {
+            0L
+        }
     }
 
-    val locations by dao.getLocationEventsBetween(startTime, Long.MAX_VALUE)
-        .collectAsState(initial = emptyList())
+    val locations by remember(startTime) {
+        dao.getLocationEventsBetween(startTime, Long.MAX_VALUE)
+    }.collectAsState(initial = emptyList())
 
     LaunchedEffect(locations, aMapInstance, isMapLoaded) {
         val map = aMapInstance ?: return@LaunchedEffect
