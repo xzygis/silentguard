@@ -160,7 +160,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
 
-    // 高德地图 SDK（注意：v10.x 的 so 尚未适配 16KB page alignment，已通过 useLegacyPackaging 规避）
+    // 高德地图 SDK（10.0.600 是 Maven Central 上最新版本，11.x 仅提供 AAR 下载）
+    // 注：SDK 内部反射 AccessibilityManager 会产生 Warning 日志，不影响功能
     implementation("com.amap.api:3dmap:10.0.600")
 
     testImplementation("junit:junit:4.13.2")
