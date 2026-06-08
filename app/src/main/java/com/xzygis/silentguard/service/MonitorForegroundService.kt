@@ -66,6 +66,10 @@ class MonitorForegroundService : Service() {
     // 自适应间隔：连续未移动次数
     private var stationaryCount = 0
     private val MAX_INTERVAL_MULTIPLIER = 4
+    // 静止状态开始时间，用于最大静止时长重置
+    private var stationarySinceMillis = 0L
+    // 最大静止持续时间（毫秒），超过后强制重置为正常频率
+    private val MAX_STATIONARY_DURATION_MS = 2 * 60 * 60 * 1000L // 2小时
 
     override fun onCreate() {
         super.onCreate()
@@ -169,6 +173,16 @@ class MonitorForegroundService : Service() {
                 Log.d(TAG, "启动间歇式定位循环: 基础间隔=${baseIntervalMinutes}分钟, 高精度=$useHighAccuracy")
 
                 while (isActive) {
+                    // 静止超时重置：超过最大静止持续时间后，重置计数恢复正常频率
+                    if (stationaryCount > 0 && stationarySinceMillis > 0) {
+                        val stationaryDuration = System.currentTimeMillis() - stationarySinceMillis
+                        if (stationaryDuration >= MAX_STATIONARY_DURATION_MS) {
+                            Log.d(TAG, "静止超过${MAX_STATIONARY_DURATION_MS / 3600000}小时，重置定位频率")
+                            stationaryCount = 0
+                            stationarySinceMillis = 0L
+                        }
+                    }
+
                     // 夜间自动延长基础间隔
                     val nightAdjusted = if (isNightTime()) {
                         maxOf(baseIntervalMinutes, NIGHT_INTERVAL_MINUTES)
@@ -180,8 +194,15 @@ class MonitorForegroundService : Service() {
                     val multiplier = minOf(1 shl stationaryCount, MAX_INTERVAL_MULTIPLIER)
                     val actualInterval = nightAdjusted * multiplier
 
-                    // 夜间自动使用低功耗定位
-                    val effectiveHighAccuracy = if (isNightTime()) false else useHighAccuracy
+                    // 静止达到上限时强制使用高精度定位，避免系统返回缓存位置
+                    val forceHighAccuracy = stationaryCount >= 2
+                    val effectiveHighAccuracy = if (isNightTime() && !forceHighAccuracy) {
+                        false
+                    } else if (forceHighAccuracy) {
+                        true
+                    } else {
+                        useHighAccuracy
+                    }
 
                     // 仅在定位期间持有 WakeLock
                     acquireWakeLock()
@@ -191,12 +212,16 @@ class MonitorForegroundService : Service() {
                     // 更新静止计数
                     if (moved) {
                         stationaryCount = 0
+                        stationarySinceMillis = 0L
                     } else {
-                        stationaryCount = minOf(stationaryCount + 1, 3) // 最大2^3=8，但被MAX_INTERVAL_MULTIPLIER限制为4
+                        if (stationaryCount == 0) {
+                            stationarySinceMillis = System.currentTimeMillis()
+                        }
+                        stationaryCount = minOf(stationaryCount + 1, 3)
                     }
 
                     val delayMillis = actualInterval * 60 * 1000L
-                    Log.d(TAG, "下次定位将在 ${actualInterval} 分钟后 (夜间=${isNightTime()}, 静止次数=$stationaryCount, 倍率=$multiplier)")
+                    Log.d(TAG, "下次定位将在 ${actualInterval} 分钟后 (夜间=${isNightTime()}, 静止次数=$stationaryCount, 倍率=$multiplier, 强制高精度=$forceHighAccuracy)")
                     delay(delayMillis)
                 }
             } catch (e: Exception) {
