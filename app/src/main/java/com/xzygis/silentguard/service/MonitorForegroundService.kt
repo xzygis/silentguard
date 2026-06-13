@@ -56,6 +56,8 @@ class MonitorForegroundService : Service() {
         private const val NIGHT_END_HOUR = 6
         private const val NIGHT_INTERVAL_MINUTES = 30
         private const val DEDUP_DISTANCE_METERS = 100f
+        private const val LOCATION_ALERT_CHECK_INTERVAL_MS = 10 * 60 * 1000L
+        private const val LOCATION_ALERT_REPEAT_INTERVAL_MS = 2 * 60 * 60 * 1000L
     }
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -63,6 +65,8 @@ class MonitorForegroundService : Service() {
     private lateinit var wakeLock: PowerManager.WakeLock
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastRecordedLocation: Location? = null
+    private var lastLocationFixMillis = System.currentTimeMillis()
+    private var lastLocationAlertMillis = 0L
     private var isLocationLoopRunning = false
     // 自适应间隔：连续未移动次数
     private var stationaryCount = 0
@@ -90,6 +94,7 @@ class MonitorForegroundService : Service() {
             startEmailScheduler()
             startEmailCheckLoop()
             startDailySummaryScheduler()
+            startLocationHealthCheckLoop()
         }
         // 设置 AlarmManager 兜底唤醒
         scheduleWatchdogAlarm()
@@ -163,7 +168,7 @@ class MonitorForegroundService : Service() {
 
     /**
      * 间歇式定位循环：每个周期执行一次 getCurrentLocation，完成后释放定位资源。
-     * 自适应间隔：设备静止时逐步延长间隔（最大4倍），移动时立即恢复正常间隔。
+     * 自适应间隔：设备静止时逐步延长间隔（最大2倍），移动时立即恢复正常间隔。
      * 夜间自动切换低功耗定位精度。
      */
     private fun startLocationPollingLoop() {
@@ -272,6 +277,7 @@ class MonitorForegroundService : Service() {
                 Log.w(TAG, "无法获取位置")
                 return false
             }
+            lastLocationFixMillis = System.currentTimeMillis()
 
             // 去重：距离上次记录不足 100 米则跳过
             lastRecordedLocation?.let { last ->
@@ -376,6 +382,64 @@ class MonitorForegroundService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "邮件检查循环启动失败: ${e.message}", e)
             }
+        }
+    }
+
+    /**
+     * 异常未定位告警：关注是否成功拿到定位结果，不以是否新增轨迹点为准。
+     * 这样设备静止导致轨迹去重时不会误报，只有连续拿不到定位时才告警。
+     */
+    private fun startLocationHealthCheckLoop() {
+        serviceScope.launch {
+            while (isActive) {
+                delay(LOCATION_ALERT_CHECK_INTERVAL_MS)
+                try {
+                    val config = appConfig.configFlow.first()
+                    val alertThresholdMs = maxOf(config.locationIntervalMinutes * 3, 30) * 60 * 1000L
+                    val now = System.currentTimeMillis()
+                    val noFixDuration = now - lastLocationFixMillis
+                    val canSendAgain = now - lastLocationAlertMillis >= LOCATION_ALERT_REPEAT_INTERVAL_MS
+                    if (noFixDuration >= alertThresholdMs && canSendAgain) {
+                        sendLocationMissingAlert(noFixDuration, alertThresholdMs)
+                        lastLocationAlertMillis = now
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "异常未定位检查失败: ${e.message}", e)
+                }
+            }
+        }
+    }
+
+    private suspend fun sendLocationMissingAlert(noFixDurationMs: Long, thresholdMs: Long) {
+        val dao = AppDatabase.getInstance(this).monitorEventDao()
+        val latestLocation = dao.getLatestLocationEvent()
+        val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
+        val subject = "[$deviceModel] 异常未定位告警"
+        val body = buildString {
+            appendLine("SilentGuard 已连续 ${noFixDurationMs / 60000} 分钟未成功获取定位。")
+            appendLine()
+            appendLine("设备: $deviceModel")
+            appendLine("告警时间: ${timeFormat.format(Date())}")
+            appendLine("告警阈值: ${thresholdMs / 60000} 分钟")
+            appendLine()
+            if (latestLocation == null) {
+                appendLine("最近轨迹: 暂无位置记录")
+            } else {
+                appendLine("最近轨迹时间: ${timeFormat.format(Date(latestLocation.timestamp))}")
+                appendLine("最近轨迹摘要: ${latestLocation.summary}")
+                if (latestLocation.latitude != null && latestLocation.longitude != null) {
+                    appendLine("Google Maps: https://maps.google.com/maps?q=${latestLocation.latitude},${latestLocation.longitude}")
+                }
+            }
+            appendLine()
+            appendLine("可能原因: 定位权限被关闭、系统限制后台定位、GPS/网络不可用、服务被系统限制。")
+        }
+
+        if (MailSender(this).sendMail(subject, body)) {
+            Log.w(TAG, "异常未定位告警已发送")
+        } else {
+            Log.w(TAG, "异常未定位告警发送失败")
         }
     }
 

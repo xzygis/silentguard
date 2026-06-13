@@ -1,5 +1,9 @@
 package com.xzygis.silentguard.ui.screen
 
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -31,6 +35,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +46,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.xzygis.silentguard.config.MonitorConfig
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
@@ -47,7 +57,13 @@ import com.xzygis.silentguard.data.MailSendRecordDao
 import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.data.MonitorEventDao
 import com.xzygis.silentguard.diagnostics.AppDiagnostics
+import com.xzygis.silentguard.location.AmapCoordinateConverter
+import com.xzygis.silentguard.location.AmapReverseGeocoder
+import com.xzygis.silentguard.mail.MailSender
 import com.xzygis.silentguard.ui.theme.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -58,6 +74,7 @@ fun DashboardScreen(
     isGuarding: Boolean,
     dao: MonitorEventDao,
     mailRecordDao: MailSendRecordDao,
+    mailSender: MailSender,
     config: MonitorConfig,
     onToggleGuarding: (Boolean) -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
@@ -65,6 +82,8 @@ fun DashboardScreen(
     onNavigateToMap: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var isSendingSos by androidx.compose.runtime.remember { mutableStateOf(false) }
     val todayStart = getTodayStartMillis()
     val totalToday by dao.getEventCountSince(todayStart).collectAsState(initial = 0)
     val smsToday by dao.getEventCountByTypeSince(EventType.SMS, todayStart).collectAsState(initial = 0)
@@ -126,6 +145,31 @@ fun DashboardScreen(
             )
         }
 
+        // 一键求助
+        item {
+            EmergencySosCard(
+                isSending = isSendingSos,
+                mailConfigured = mailConfigured,
+                onSend = {
+                    if (!mailConfigured) {
+                        Toast.makeText(context, "请先在设置中配置邮箱", Toast.LENGTH_LONG).show()
+                        return@EmergencySosCard
+                    }
+                    scope.launch {
+                        isSendingSos = true
+                        Toast.makeText(context, "正在发送求助邮件…", Toast.LENGTH_SHORT).show()
+                        val sent = sendSosMail(context, mailSender, config)
+                        isSendingSos = false
+                        Toast.makeText(
+                            context,
+                            if (sent) "求助邮件已发送" else "求助邮件发送失败，请检查邮箱配置",
+                            if (sent) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            )
+        }
+
         // 统计卡片
         item {
             Row(
@@ -177,6 +221,65 @@ fun DashboardScreen(
         }
 
         item { Spacer(modifier = Modifier.height(16.dp)) }
+    }
+}
+
+@Composable
+private fun EmergencySosCard(
+    isSending: Boolean,
+    mailConfigured: Boolean,
+    onSend: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !isSending) { onSend() },
+        shape = RoundedCornerShape(18.dp),
+        color = if (mailConfigured) ErrorSurface else WarningSurface
+    ) {
+        Row(
+            modifier = Modifier.padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(if (mailConfigured) Error else Warning),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "SOS",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OnPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isSending) "正在发送求助…" else "一键求助",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = if (mailConfigured) {
+                        "立即发送当前位置、设备型号和时间到监护邮箱"
+                    } else {
+                        "请先配置邮箱后再使用"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = if (isSending) "发送中" else "发送",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (mailConfigured) Error else Warning,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
     }
 }
 
@@ -522,6 +625,92 @@ private fun formatTime(timestamp: Long): String {
         diff < TimeUnit.HOURS.toMillis(1) -> "${diff / TimeUnit.MINUTES.toMillis(1)}分钟前"
         diff < TimeUnit.DAYS.toMillis(1) -> "${diff / TimeUnit.HOURS.toMillis(1)}小时前"
         else -> SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date(timestamp))
+    }
+}
+
+private suspend fun sendSosMail(
+    context: Context,
+    mailSender: MailSender,
+    config: MonitorConfig
+): Boolean {
+    val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+    val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
+    val subject = "[$deviceModel] SOS 一键求助"
+    val body = StringBuilder()
+        .appendLine("收到一键求助请求，请尽快确认被监护人状态。")
+        .appendLine()
+        .appendLine("设备: $deviceModel")
+        .appendLine("求助时间: ${timeFormat.format(Date())}")
+
+    val hasPermission = ContextCompat.checkSelfPermission(
+        context,
+        android.Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+        context,
+        android.Manifest.permission.ACCESS_COARSE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+
+    if (!hasPermission) {
+        return mailSender.sendMail(
+            subject = subject,
+            body = body.appendLine("当前位置: 未授予定位权限").toString()
+        )
+    }
+
+    return try {
+        val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+        var location = withTimeoutOrNull(12_000L) {
+            fusedClient.getCurrentLocation(
+                Priority.PRIORITY_HIGH_ACCURACY,
+                CancellationTokenSource().token
+            ).await()
+        }
+        if (location == null) {
+            location = fusedClient.lastLocation.await()
+        }
+
+        if (location == null) {
+            mailSender.sendMail(
+                subject = subject,
+                body = body.appendLine("当前位置: 暂未获取到定位结果").toString()
+            )
+        } else {
+            val address = AmapReverseGeocoder.resolveAddress(
+                context = context,
+                apiKey = config.amapWebApiKey,
+                latitude = location.latitude,
+                longitude = location.longitude
+            )
+            val amapLatLng = AmapCoordinateConverter.toAmapLatLng(context, location.latitude, location.longitude)
+            val amapLink = String.format(
+                Locale.US,
+                "https://uri.amap.com/marker?position=%.6f,%.6f&name=SOS求助位置",
+                amapLatLng.longitude,
+                amapLatLng.latitude
+            )
+            val googleLink = "https://maps.google.com/maps?q=${location.latitude},${location.longitude}"
+            mailSender.sendMail(
+                subject = subject,
+                body = body
+                    .appendLine()
+                    .appendLine("当前位置:")
+                    .apply {
+                        if (address != null) appendLine("地址: $address")
+                    }
+                    .appendLine("经度: ${location.longitude}")
+                    .appendLine("纬度: ${location.latitude}")
+                    .appendLine("精度: ${location.accuracy}米")
+                    .appendLine("定位时间: ${timeFormat.format(Date(location.time))}")
+                    .appendLine("高德地图: $amapLink")
+                    .appendLine("Google Maps: $googleLink")
+                    .toString()
+            )
+        }
+    } catch (e: Exception) {
+        mailSender.sendMail(
+            subject = subject,
+            body = body.appendLine("当前位置: 获取失败（${e.message ?: "未知错误"}）").toString()
+        )
     }
 }
 
