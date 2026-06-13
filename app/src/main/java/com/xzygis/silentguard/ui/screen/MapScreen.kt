@@ -69,14 +69,15 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.coroutines.resume
 
-private enum class TimeRange(val label: String, val hours: Int) {
-    TODAY("今天", 24),
-    WEEK("本周", 168),
-    ALL("全部", -1)
+private enum class TimeRange(val label: String, val days: Int) {
+    TODAY("今天", 0),
+    THREE_DAYS("三天", 3),
+    WEEK("本周", 7)
 }
 
 private data class TrackMarkerInfo(
@@ -433,11 +434,16 @@ fun MapScreen(dao: MonitorEventDao) {
     }
 
     val startTime = remember(selectedRange) {
-        if (selectedRange.hours > 0) {
-            System.currentTimeMillis() - selectedRange.hours * 3600_000L
-        } else {
-            0L
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            if (selectedRange.days > 0) {
+                add(Calendar.DAY_OF_MONTH, -(selectedRange.days - 1))
+            }
         }
+        cal.timeInMillis
     }
 
     val locations by remember(startTime) {

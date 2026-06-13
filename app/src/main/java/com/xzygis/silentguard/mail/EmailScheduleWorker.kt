@@ -1,6 +1,7 @@
 package com.xzygis.silentguard.mail
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -87,7 +88,7 @@ class EmailScheduleWorker(
                 event.id to resolvedAddress
             }
 
-            val subject = "[位置] ${displayEvents.size}条位置记录（今日）"
+            val subject = "[${Build.MANUFACTURER} ${Build.MODEL}] ${displayEvents.size}条位置记录（今日）"
 
             val mailSent = if (mapUrl != null) {
                 // HTML 邮件：内嵌地图 + 位置详情
