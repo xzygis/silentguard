@@ -30,6 +30,7 @@ import com.xzygis.silentguard.data.EventType
 import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.location.AmapReverseGeocoder
 import com.xzygis.silentguard.mail.EmailScheduleWorker
+import com.xzygis.silentguard.mail.MailSender
 import com.xzygis.silentguard.receiver.ServiceWatchdogReceiver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -65,11 +66,11 @@ class MonitorForegroundService : Service() {
     private var isLocationLoopRunning = false
     // 自适应间隔：连续未移动次数
     private var stationaryCount = 0
-    private val MAX_INTERVAL_MULTIPLIER = 4
+    private val MAX_INTERVAL_MULTIPLIER = 2
     // 静止状态开始时间，用于最大静止时长重置
     private var stationarySinceMillis = 0L
     // 最大静止持续时间（毫秒），超过后强制重置为正常频率
-    private val MAX_STATIONARY_DURATION_MS = 2 * 60 * 60 * 1000L // 2小时
+    private val MAX_STATIONARY_DURATION_MS = 30 * 60 * 1000L // 30分钟
 
     override fun onCreate() {
         super.onCreate()
@@ -88,6 +89,7 @@ class MonitorForegroundService : Service() {
             startLocationPollingLoop()
             startEmailScheduler()
             startEmailCheckLoop()
+            startDailySummaryScheduler()
         }
         // 设置 AlarmManager 兜底唤醒
         scheduleWatchdogAlarm()
@@ -190,7 +192,7 @@ class MonitorForegroundService : Service() {
                         baseIntervalMinutes
                     }
 
-                    // 自适应间隔：静止时逐步翻倍，最大4倍
+                    // 自适应间隔：静止时逐步翻倍，最大2倍
                     val multiplier = minOf(1 shl stationaryCount, MAX_INTERVAL_MULTIPLIER)
                     val actualInterval = nightAdjusted * multiplier
 
@@ -374,6 +376,77 @@ class MonitorForegroundService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "邮件检查循环启动失败: ${e.message}", e)
             }
+        }
+    }
+
+    /**
+     * 每日 23:59 自动发送当天位置汇总邮件（即使没有新轨迹点也发送）
+     */
+    private fun startDailySummaryScheduler() {
+        serviceScope.launch {
+            while (isActive) {
+                val now = Calendar.getInstance()
+                val target = Calendar.getInstance().apply {
+                    set(Calendar.HOUR_OF_DAY, 23)
+                    set(Calendar.MINUTE, 59)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                    // 如果当前已过 23:59，则设定为明天
+                    if (before(now)) add(Calendar.DAY_OF_MONTH, 1)
+                }
+                val delayMs = target.timeInMillis - now.timeInMillis
+                Log.d(TAG, "每日汇总邮件将在 ${delayMs / 60000} 分钟后发送")
+                delay(delayMs)
+
+                try {
+                    sendDailySummaryEmail()
+                } catch (e: Exception) {
+                    Log.e(TAG, "每日汇总邮件发送失败: ${e.message}", e)
+                }
+            }
+        }
+    }
+
+    /**
+     * 发送当天所有位置记录的汇总邮件（不依赖 PENDING 状态）
+     */
+    private suspend fun sendDailySummaryEmail() {
+        val dao = AppDatabase.getInstance(this).monitorEventDao()
+        val startOfToday = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val todayEvents = dao.getTodayLocationEvents(startOfToday)
+        val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
+        val subject = if (todayEvents.isEmpty()) {
+            "[$deviceModel] 每日位置汇总 - 今日无轨迹点"
+        } else {
+            "[$deviceModel] 每日位置汇总 - ${todayEvents.size}条记录"
+        }
+
+        val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val body = if (todayEvents.isEmpty()) {
+            "今日设备未产生任何位置记录。设备可能处于静止状态或服务未正常运行。\n\n设备: $deviceModel\n报告时间: ${timeFormat.format(Date())}"
+        } else {
+            buildString {
+                appendLine("设备: $deviceModel")
+                appendLine("今日共 ${todayEvents.size} 条位置记录")
+                appendLine()
+                todayEvents.forEach { event ->
+                    appendLine("--- ${timeFormat.format(Date(event.timestamp))} ---")
+                    appendLine(event.detail)
+                    appendLine()
+                }
+            }
+        }
+
+        val sent = MailSender(this).sendMail(subject, body)
+        if (sent) {
+            Log.d(TAG, "每日汇总邮件发送成功")
+        } else {
+            Log.w(TAG, "每日汇总邮件发送失败")
         }
     }
 
