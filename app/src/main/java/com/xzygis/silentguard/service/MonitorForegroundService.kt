@@ -8,8 +8,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.location.Location
+import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -58,6 +60,10 @@ class MonitorForegroundService : Service() {
         private const val DEDUP_DISTANCE_METERS = 100f
         private const val LOCATION_ALERT_CHECK_INTERVAL_MS = 10 * 60 * 1000L
         private const val LOCATION_ALERT_REPEAT_INTERVAL_MS = 2 * 60 * 60 * 1000L
+        private const val BATTERY_ALERT_CHECK_INTERVAL_MS = 15 * 60 * 1000L
+        private const val BATTERY_ALERT_REPEAT_INTERVAL_MS = 6 * 60 * 60 * 1000L
+        private const val LOW_BATTERY_THRESHOLD_PERCENT = 10
+        private const val LOW_BATTERY_RECOVERY_PERCENT = 15
     }
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -67,6 +73,8 @@ class MonitorForegroundService : Service() {
     private var lastRecordedLocation: Location? = null
     private var lastLocationFixMillis = System.currentTimeMillis()
     private var lastLocationAlertMillis = 0L
+    private var lastLowBatteryAlertMillis = 0L
+    private var lowBatteryAlertActive = false
     private var isLocationLoopRunning = false
     // 自适应间隔：连续未移动次数
     private var stationaryCount = 0
@@ -95,6 +103,7 @@ class MonitorForegroundService : Service() {
             startEmailCheckLoop()
             startDailySummaryScheduler()
             startLocationHealthCheckLoop()
+            startBatteryHealthCheckLoop()
         }
         // 设置 AlarmManager 兜底唤醒
         scheduleWatchdogAlarm()
@@ -442,6 +451,92 @@ class MonitorForegroundService : Service() {
             Log.w(TAG, "异常未定位告警发送失败")
         }
     }
+
+    /**
+     * 低电量提醒：电量低于 10% 时发送邮件，避免监护设备关机后彻底失联。
+     */
+    private fun startBatteryHealthCheckLoop() {
+        serviceScope.launch {
+            while (isActive) {
+                try {
+                    checkAndSendLowBatteryAlert()
+                } catch (e: Exception) {
+                    Log.e(TAG, "低电量检查失败: ${e.message}", e)
+                }
+                delay(BATTERY_ALERT_CHECK_INTERVAL_MS)
+            }
+        }
+    }
+
+    private suspend fun checkAndSendLowBatteryAlert() {
+        val batteryInfo = getBatteryInfo() ?: return
+        if (batteryInfo.percent >= LOW_BATTERY_RECOVERY_PERCENT) {
+            lowBatteryAlertActive = false
+            return
+        }
+
+        if (batteryInfo.percent > LOW_BATTERY_THRESHOLD_PERCENT) return
+
+        val now = System.currentTimeMillis()
+        val canSendAgain = now - lastLowBatteryAlertMillis >= BATTERY_ALERT_REPEAT_INTERVAL_MS
+        if (!lowBatteryAlertActive || canSendAgain) {
+            sendLowBatteryAlert(batteryInfo)
+            lowBatteryAlertActive = true
+            lastLowBatteryAlertMillis = now
+        }
+    }
+
+    private fun getBatteryInfo(): BatteryInfo? {
+        val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return null
+        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        if (level < 0 || scale <= 0) return null
+
+        val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+        val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == BatteryManager.BATTERY_STATUS_FULL
+        return BatteryInfo(
+            percent = (level * 100) / scale,
+            isCharging = isCharging
+        )
+    }
+
+    private suspend fun sendLowBatteryAlert(batteryInfo: BatteryInfo) {
+        val dao = AppDatabase.getInstance(this).monitorEventDao()
+        val latestLocation = dao.getLatestLocationEvent()
+        val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
+        val subject = "[$deviceModel] 低电量提醒 - ${batteryInfo.percent}%"
+        val body = buildString {
+            appendLine("监护设备电量已低于 ${LOW_BATTERY_THRESHOLD_PERCENT}%，请尽快充电，避免设备关机后失联。")
+            appendLine()
+            appendLine("设备: $deviceModel")
+            appendLine("当前电量: ${batteryInfo.percent}%")
+            appendLine("充电状态: ${if (batteryInfo.isCharging) "正在充电" else "未充电"}")
+            appendLine("提醒时间: ${timeFormat.format(Date())}")
+            appendLine()
+            if (latestLocation == null) {
+                appendLine("最近轨迹: 暂无位置记录")
+            } else {
+                appendLine("最近轨迹时间: ${timeFormat.format(Date(latestLocation.timestamp))}")
+                appendLine("最近轨迹摘要: ${latestLocation.summary}")
+                if (latestLocation.latitude != null && latestLocation.longitude != null) {
+                    appendLine("Google Maps: https://maps.google.com/maps?q=${latestLocation.latitude},${latestLocation.longitude}")
+                }
+            }
+        }
+
+        if (MailSender(this).sendMail(subject, body)) {
+            Log.w(TAG, "低电量提醒已发送: ${batteryInfo.percent}%")
+        } else {
+            Log.w(TAG, "低电量提醒发送失败")
+        }
+    }
+
+    private data class BatteryInfo(
+        val percent: Int,
+        val isCharging: Boolean
+    )
 
     /**
      * 每日 23:59 自动发送当天位置汇总邮件（即使没有新轨迹点也发送）
