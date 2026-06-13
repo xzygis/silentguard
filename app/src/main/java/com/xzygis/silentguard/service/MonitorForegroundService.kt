@@ -8,8 +8,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.location.Location
+import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -56,6 +58,11 @@ class MonitorForegroundService : Service() {
         private const val NIGHT_END_HOUR = 6
         private const val NIGHT_INTERVAL_MINUTES = 30
         private const val DEDUP_DISTANCE_METERS = 100f
+        private const val LOCATION_ALERT_CHECK_INTERVAL_MS = 10 * 60 * 1000L
+        private const val LOCATION_ALERT_REPEAT_INTERVAL_MS = 2 * 60 * 60 * 1000L
+        private const val BATTERY_ALERT_REPEAT_INTERVAL_MS = 6 * 60 * 60 * 1000L
+        private const val LOW_BATTERY_THRESHOLD_PERCENT = 10
+        private const val LOW_BATTERY_RECOVERY_PERCENT = 15
     }
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -63,6 +70,10 @@ class MonitorForegroundService : Service() {
     private lateinit var wakeLock: PowerManager.WakeLock
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastRecordedLocation: Location? = null
+    private var lastLocationFixMillis = System.currentTimeMillis()
+    private var lastLocationAlertMillis = 0L
+    private var lastLowBatteryAlertMillis = 0L
+    private var lowBatteryAlertActive = false
     private var isLocationLoopRunning = false
     // 自适应间隔：连续未移动次数
     private var stationaryCount = 0
@@ -90,6 +101,7 @@ class MonitorForegroundService : Service() {
             startEmailScheduler()
             startEmailCheckLoop()
             startDailySummaryScheduler()
+            startLocationHealthCheckLoop()
         }
         // 设置 AlarmManager 兜底唤醒
         scheduleWatchdogAlarm()
@@ -163,7 +175,7 @@ class MonitorForegroundService : Service() {
 
     /**
      * 间歇式定位循环：每个周期执行一次 getCurrentLocation，完成后释放定位资源。
-     * 自适应间隔：设备静止时逐步延长间隔（最大4倍），移动时立即恢复正常间隔。
+     * 自适应间隔：设备静止时逐步延长间隔（最大2倍），移动时立即恢复正常间隔。
      * 夜间自动切换低功耗定位精度。
      */
     private fun startLocationPollingLoop() {
@@ -210,6 +222,7 @@ class MonitorForegroundService : Service() {
                     acquireWakeLock()
                     val moved = fetchAndRecordLocation(effectiveHighAccuracy)
                     releaseWakeLock()
+                    checkAndSendLowBatteryAlert()
 
                     // 更新静止计数
                     if (moved) {
@@ -272,6 +285,7 @@ class MonitorForegroundService : Service() {
                 Log.w(TAG, "无法获取位置")
                 return false
             }
+            lastLocationFixMillis = System.currentTimeMillis()
 
             // 去重：距离上次记录不足 100 米则跳过
             lastRecordedLocation?.let { last ->
@@ -378,6 +392,138 @@ class MonitorForegroundService : Service() {
             }
         }
     }
+
+    /**
+     * 异常未定位告警：关注是否成功拿到定位结果，不以是否新增轨迹点为准。
+     * 这样设备静止导致轨迹去重时不会误报，只有连续拿不到定位时才告警。
+     */
+    private fun startLocationHealthCheckLoop() {
+        serviceScope.launch {
+            while (isActive) {
+                delay(LOCATION_ALERT_CHECK_INTERVAL_MS)
+                try {
+                    val config = appConfig.configFlow.first()
+                    val alertThresholdMs = maxOf(config.locationIntervalMinutes * 3, 30) * 60 * 1000L
+                    val now = System.currentTimeMillis()
+                    val noFixDuration = now - lastLocationFixMillis
+                    val canSendAgain = now - lastLocationAlertMillis >= LOCATION_ALERT_REPEAT_INTERVAL_MS
+                    if (noFixDuration >= alertThresholdMs && canSendAgain) {
+                        sendLocationMissingAlert(noFixDuration, alertThresholdMs)
+                        lastLocationAlertMillis = now
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "异常未定位检查失败: ${e.message}", e)
+                }
+            }
+        }
+    }
+
+    private suspend fun sendLocationMissingAlert(noFixDurationMs: Long, thresholdMs: Long) {
+        val dao = AppDatabase.getInstance(this).monitorEventDao()
+        val latestLocation = dao.getLatestLocationEvent()
+        val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
+        val subject = "[$deviceModel] 异常未定位告警"
+        val body = buildString {
+            appendLine("SilentGuard 已连续 ${noFixDurationMs / 60000} 分钟未成功获取定位。")
+            appendLine()
+            appendLine("设备: $deviceModel")
+            appendLine("告警时间: ${timeFormat.format(Date())}")
+            appendLine("告警阈值: ${thresholdMs / 60000} 分钟")
+            appendLine()
+            if (latestLocation == null) {
+                appendLine("最近轨迹: 暂无位置记录")
+            } else {
+                appendLine("最近轨迹时间: ${timeFormat.format(Date(latestLocation.timestamp))}")
+                appendLine("最近轨迹摘要: ${latestLocation.summary}")
+                if (latestLocation.latitude != null && latestLocation.longitude != null) {
+                    appendLine("Google Maps: https://maps.google.com/maps?q=${latestLocation.latitude},${latestLocation.longitude}")
+                }
+            }
+            appendLine()
+            appendLine("可能原因: 定位权限被关闭、系统限制后台定位、GPS/网络不可用、服务被系统限制。")
+        }
+
+        if (MailSender(this).sendMail(subject, body)) {
+            Log.w(TAG, "异常未定位告警已发送")
+        } else {
+            Log.w(TAG, "异常未定位告警发送失败")
+        }
+    }
+
+    private suspend fun checkAndSendLowBatteryAlert() {
+        try {
+            val batteryInfo = getBatteryInfo() ?: return
+            if (batteryInfo.percent >= LOW_BATTERY_RECOVERY_PERCENT) {
+                lowBatteryAlertActive = false
+                return
+            }
+
+            if (batteryInfo.percent > LOW_BATTERY_THRESHOLD_PERCENT) return
+
+            val now = System.currentTimeMillis()
+            val canSendAgain = now - lastLowBatteryAlertMillis >= BATTERY_ALERT_REPEAT_INTERVAL_MS
+            if (!lowBatteryAlertActive || canSendAgain) {
+                sendLowBatteryAlert(batteryInfo)
+                lowBatteryAlertActive = true
+                lastLowBatteryAlertMillis = now
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "低电量检查失败: ${e.message}", e)
+        }
+    }
+
+    private fun getBatteryInfo(): BatteryInfo? {
+        val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return null
+        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        if (level < 0 || scale <= 0) return null
+
+        val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+        val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == BatteryManager.BATTERY_STATUS_FULL
+        return BatteryInfo(
+            percent = (level * 100) / scale,
+            isCharging = isCharging
+        )
+    }
+
+    private suspend fun sendLowBatteryAlert(batteryInfo: BatteryInfo) {
+        val dao = AppDatabase.getInstance(this).monitorEventDao()
+        val latestLocation = dao.getLatestLocationEvent()
+        val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
+        val subject = "[$deviceModel] 低电量提醒 - ${batteryInfo.percent}%"
+        val body = buildString {
+            appendLine("监护设备电量已低于 ${LOW_BATTERY_THRESHOLD_PERCENT}%，请尽快充电，避免设备关机后失联。")
+            appendLine()
+            appendLine("设备: $deviceModel")
+            appendLine("当前电量: ${batteryInfo.percent}%")
+            appendLine("充电状态: ${if (batteryInfo.isCharging) "正在充电" else "未充电"}")
+            appendLine("提醒时间: ${timeFormat.format(Date())}")
+            appendLine()
+            if (latestLocation == null) {
+                appendLine("最近轨迹: 暂无位置记录")
+            } else {
+                appendLine("最近轨迹时间: ${timeFormat.format(Date(latestLocation.timestamp))}")
+                appendLine("最近轨迹摘要: ${latestLocation.summary}")
+                if (latestLocation.latitude != null && latestLocation.longitude != null) {
+                    appendLine("Google Maps: https://maps.google.com/maps?q=${latestLocation.latitude},${latestLocation.longitude}")
+                }
+            }
+        }
+
+        if (MailSender(this).sendMail(subject, body)) {
+            Log.w(TAG, "低电量提醒已发送: ${batteryInfo.percent}%")
+        } else {
+            Log.w(TAG, "低电量提醒发送失败")
+        }
+    }
+
+    private data class BatteryInfo(
+        val percent: Int,
+        val isCharging: Boolean
+    )
 
     /**
      * 每日 23:59 自动发送当天位置汇总邮件（即使没有新轨迹点也发送）
