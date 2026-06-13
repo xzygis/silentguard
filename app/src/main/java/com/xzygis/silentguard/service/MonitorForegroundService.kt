@@ -60,7 +60,6 @@ class MonitorForegroundService : Service() {
         private const val DEDUP_DISTANCE_METERS = 100f
         private const val LOCATION_ALERT_CHECK_INTERVAL_MS = 10 * 60 * 1000L
         private const val LOCATION_ALERT_REPEAT_INTERVAL_MS = 2 * 60 * 60 * 1000L
-        private const val BATTERY_ALERT_CHECK_INTERVAL_MS = 15 * 60 * 1000L
         private const val BATTERY_ALERT_REPEAT_INTERVAL_MS = 6 * 60 * 60 * 1000L
         private const val LOW_BATTERY_THRESHOLD_PERCENT = 10
         private const val LOW_BATTERY_RECOVERY_PERCENT = 15
@@ -103,7 +102,6 @@ class MonitorForegroundService : Service() {
             startEmailCheckLoop()
             startDailySummaryScheduler()
             startLocationHealthCheckLoop()
-            startBatteryHealthCheckLoop()
         }
         // 设置 AlarmManager 兜底唤醒
         scheduleWatchdogAlarm()
@@ -224,6 +222,7 @@ class MonitorForegroundService : Service() {
                     acquireWakeLock()
                     val moved = fetchAndRecordLocation(effectiveHighAccuracy)
                     releaseWakeLock()
+                    checkAndSendLowBatteryAlert()
 
                     // 更新静止计数
                     if (moved) {
@@ -452,37 +451,25 @@ class MonitorForegroundService : Service() {
         }
     }
 
-    /**
-     * 低电量提醒：电量低于 10% 时发送邮件，避免监护设备关机后彻底失联。
-     */
-    private fun startBatteryHealthCheckLoop() {
-        serviceScope.launch {
-            while (isActive) {
-                try {
-                    checkAndSendLowBatteryAlert()
-                } catch (e: Exception) {
-                    Log.e(TAG, "低电量检查失败: ${e.message}", e)
-                }
-                delay(BATTERY_ALERT_CHECK_INTERVAL_MS)
-            }
-        }
-    }
-
     private suspend fun checkAndSendLowBatteryAlert() {
-        val batteryInfo = getBatteryInfo() ?: return
-        if (batteryInfo.percent >= LOW_BATTERY_RECOVERY_PERCENT) {
-            lowBatteryAlertActive = false
-            return
-        }
+        try {
+            val batteryInfo = getBatteryInfo() ?: return
+            if (batteryInfo.percent >= LOW_BATTERY_RECOVERY_PERCENT) {
+                lowBatteryAlertActive = false
+                return
+            }
 
-        if (batteryInfo.percent > LOW_BATTERY_THRESHOLD_PERCENT) return
+            if (batteryInfo.percent > LOW_BATTERY_THRESHOLD_PERCENT) return
 
-        val now = System.currentTimeMillis()
-        val canSendAgain = now - lastLowBatteryAlertMillis >= BATTERY_ALERT_REPEAT_INTERVAL_MS
-        if (!lowBatteryAlertActive || canSendAgain) {
-            sendLowBatteryAlert(batteryInfo)
-            lowBatteryAlertActive = true
-            lastLowBatteryAlertMillis = now
+            val now = System.currentTimeMillis()
+            val canSendAgain = now - lastLowBatteryAlertMillis >= BATTERY_ALERT_REPEAT_INTERVAL_MS
+            if (!lowBatteryAlertActive || canSendAgain) {
+                sendLowBatteryAlert(batteryInfo)
+                lowBatteryAlertActive = true
+                lastLowBatteryAlertMillis = now
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "低电量检查失败: ${e.message}", e)
         }
     }
 
