@@ -162,7 +162,6 @@ class MainActivity : ComponentActivity() {
                         isGuarding = config.isGuardingEnabled,
                         dao = dao,
                         mailRecordDao = mailRecordDao,
-                        mailSender = mailSender,
                         config = config,
                         onToggleGuarding = { toggleGuarding(it) },
                         onNavigateToSettings = {

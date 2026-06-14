@@ -58,8 +58,7 @@ import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.data.MonitorEventDao
 import com.xzygis.silentguard.diagnostics.AppDiagnostics
 import com.xzygis.silentguard.location.AmapCoordinateConverter
-import com.xzygis.silentguard.location.AmapReverseGeocoder
-import com.xzygis.silentguard.mail.MailSender
+import com.xzygis.silentguard.mail.MailWorker
 import com.xzygis.silentguard.ui.theme.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -74,7 +73,6 @@ fun DashboardScreen(
     isGuarding: Boolean,
     dao: MonitorEventDao,
     mailRecordDao: MailSendRecordDao,
-    mailSender: MailSender,
     config: MonitorConfig,
     onToggleGuarding: (Boolean) -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
@@ -157,13 +155,13 @@ fun DashboardScreen(
                     }
                     scope.launch {
                         isSendingSos = true
-                        Toast.makeText(context, "正在发送求助邮件…", Toast.LENGTH_SHORT).show()
-                        val sent = sendSosMail(context, mailSender, config)
+                        Toast.makeText(context, "正在提交求助…", Toast.LENGTH_SHORT).show()
+                        val queued = enqueueSosMail(context, dao)
                         isSendingSos = false
                         Toast.makeText(
                             context,
-                            if (sent) "求助邮件已发送" else "求助邮件发送失败，请检查邮箱配置",
-                            if (sent) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                            if (queued) "SOS 已提交，后台发送中" else "SOS 提交失败",
+                            if (queued) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
                         ).show()
                     }
                 }
@@ -622,10 +620,9 @@ private fun formatTime(timestamp: Long): String {
     }
 }
 
-private suspend fun sendSosMail(
+private suspend fun enqueueSosMail(
     context: Context,
-    mailSender: MailSender,
-    config: MonitorConfig
+    dao: MonitorEventDao
 ): Boolean {
     val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
@@ -644,37 +641,24 @@ private suspend fun sendSosMail(
         android.Manifest.permission.ACCESS_COARSE_LOCATION
     ) == PackageManager.PERMISSION_GRANTED
 
-    if (!hasPermission) {
-        return mailSender.sendMail(
-            subject = subject,
-            body = body.appendLine("当前位置: 未授予定位权限").toString()
-        )
-    }
-
     return try {
+        if (!hasPermission) {
+            body.appendLine("当前位置: 未授予定位权限")
+            MailWorker.enqueue(context.applicationContext, subject, body.toString())
+            return true
+        }
+
         val fusedClient = LocationServices.getFusedLocationProviderClient(context)
-        var location = withTimeoutOrNull(12_000L) {
+        val location = withTimeoutOrNull(3_000L) {
             fusedClient.getCurrentLocation(
-                Priority.PRIORITY_HIGH_ACCURACY,
+                Priority.PRIORITY_BALANCED_POWER_ACCURACY,
                 CancellationTokenSource().token
             ).await()
-        }
-        if (location == null) {
-            location = fusedClient.lastLocation.await()
+        } ?: withTimeoutOrNull(1_000L) {
+            fusedClient.lastLocation.await()
         }
 
-        if (location == null) {
-            mailSender.sendMail(
-                subject = subject,
-                body = body.appendLine("当前位置: 暂未获取到定位结果").toString()
-            )
-        } else {
-            val address = AmapReverseGeocoder.resolveAddress(
-                context = context,
-                apiKey = config.amapWebApiKey,
-                latitude = location.latitude,
-                longitude = location.longitude
-            )
+        if (location != null) {
             val amapLatLng = AmapCoordinateConverter.toAmapLatLng(context, location.latitude, location.longitude)
             val amapLink = String.format(
                 Locale.US,
@@ -683,28 +667,44 @@ private suspend fun sendSosMail(
                 amapLatLng.latitude
             )
             val googleLink = "https://maps.google.com/maps?q=${location.latitude},${location.longitude}"
-            mailSender.sendMail(
-                subject = subject,
-                body = body
+            body
+                .appendLine()
+                .appendLine("当前位置:")
+                .appendLine("经度: ${location.longitude}")
+                .appendLine("纬度: ${location.latitude}")
+                .appendLine("精度: ${location.accuracy}米")
+                .appendLine("定位时间: ${timeFormat.format(Date(location.time))}")
+                .appendLine("高德地图: $amapLink")
+                .appendLine("Google Maps: $googleLink")
+        } else {
+            val latest = dao.getLatestLocationEvent()
+            if (latest != null && latest.latitude != null && latest.longitude != null) {
+                val amapLatLng = AmapCoordinateConverter.toAmapLatLng(context, latest.latitude, latest.longitude)
+                val amapLink = String.format(
+                    Locale.US,
+                    "https://uri.amap.com/marker?position=%.6f,%.6f&name=SOS最近位置",
+                    amapLatLng.longitude,
+                    amapLatLng.latitude
+                )
+                val googleLink = "https://maps.google.com/maps?q=${latest.latitude},${latest.longitude}"
+                body
                     .appendLine()
-                    .appendLine("当前位置:")
-                    .apply {
-                        if (address != null) appendLine("地址: $address")
-                    }
-                    .appendLine("经度: ${location.longitude}")
-                    .appendLine("纬度: ${location.latitude}")
-                    .appendLine("精度: ${location.accuracy}米")
-                    .appendLine("定位时间: ${timeFormat.format(Date(location.time))}")
+                    .appendLine("当前位置: 本次未快速获取到新定位，使用最近轨迹点")
+                    .appendLine("最近轨迹时间: ${timeFormat.format(Date(latest.timestamp))}")
+                    .appendLine("最近轨迹摘要: ${latest.summary}")
                     .appendLine("高德地图: $amapLink")
                     .appendLine("Google Maps: $googleLink")
-                    .toString()
-            )
+            } else {
+                body.appendLine("当前位置: 暂未快速获取到定位结果")
+            }
         }
+
+        MailWorker.enqueue(context.applicationContext, subject, body.toString())
+        true
     } catch (e: Exception) {
-        mailSender.sendMail(
-            subject = subject,
-            body = body.appendLine("当前位置: 获取失败（${e.message ?: "未知错误"}）").toString()
-        )
+        body.appendLine("当前位置: 获取失败（${e.message ?: "未知错误"}）")
+        MailWorker.enqueue(context.applicationContext, subject, body.toString())
+        true
     }
 }
 
