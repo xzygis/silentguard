@@ -59,6 +59,7 @@ import com.xzygis.silentguard.data.MonitorEventDao
 import com.xzygis.silentguard.diagnostics.AppDiagnostics
 import com.xzygis.silentguard.location.AmapCoordinateConverter
 import com.xzygis.silentguard.mail.MailWorker
+import com.xzygis.silentguard.mail.StaticMapUrlBuilder
 import com.xzygis.silentguard.ui.theme.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -156,7 +157,7 @@ fun DashboardScreen(
                     scope.launch {
                         isSendingSos = true
                         Toast.makeText(context, "正在提交求助…", Toast.LENGTH_SHORT).show()
-                        val queued = enqueueSosMail(context, dao)
+                        val queued = enqueueSosMail(context, dao, config)
                         isSendingSos = false
                         Toast.makeText(
                             context,
@@ -622,7 +623,8 @@ private fun formatTime(timestamp: Long): String {
 
 private suspend fun enqueueSosMail(
     context: Context,
-    dao: MonitorEventDao
+    dao: MonitorEventDao,
+    config: MonitorConfig
 ): Boolean {
     val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
@@ -658,6 +660,9 @@ private suspend fun enqueueSosMail(
             fusedClient.lastLocation.await()
         }
 
+        var sosEvent: MonitorEvent? = null
+        var locationNote: String? = null
+
         if (location != null) {
             val amapLatLng = AmapCoordinateConverter.toAmapLatLng(context, location.latitude, location.longitude)
             val amapLink = String.format(
@@ -676,6 +681,15 @@ private suspend fun enqueueSosMail(
                 .appendLine("定位时间: ${timeFormat.format(Date(location.time))}")
                 .appendLine("高德地图: $amapLink")
                 .appendLine("Google Maps: $googleLink")
+            sosEvent = MonitorEvent(
+                type = EventType.LOCATION,
+                title = "SOS求助位置",
+                summary = "SOS求助位置",
+                latitude = location.latitude,
+                longitude = location.longitude,
+                accuracy = location.accuracy,
+                timestamp = location.time.takeIf { it > 0 } ?: System.currentTimeMillis()
+            )
         } else {
             val latest = dao.getLatestLocationEvent()
             if (latest != null && latest.latitude != null && latest.longitude != null) {
@@ -694,18 +708,97 @@ private suspend fun enqueueSosMail(
                     .appendLine("最近轨迹摘要: ${latest.summary}")
                     .appendLine("高德地图: $amapLink")
                     .appendLine("Google Maps: $googleLink")
+                sosEvent = latest
+                locationNote = "本次未快速获取到新定位，使用最近轨迹点"
             } else {
                 body.appendLine("当前位置: 暂未快速获取到定位结果")
             }
         }
 
-        MailWorker.enqueue(context.applicationContext, subject, body.toString())
+        val mapUrl = sosEvent?.let {
+            StaticMapUrlBuilder.buildUrl(context, listOf(it), config.amapWebApiKey)
+        }
+        if (sosEvent != null && mapUrl != null) {
+            val amapLatLng = AmapCoordinateConverter.toAmapLatLng(
+                context,
+                sosEvent.latitude ?: 0.0,
+                sosEvent.longitude ?: 0.0
+            )
+            val amapLink = String.format(
+                Locale.US,
+                "https://uri.amap.com/marker?position=%.6f,%.6f&name=SOS求助位置",
+                amapLatLng.longitude,
+                amapLatLng.latitude
+            )
+            val googleLink = "https://maps.google.com/maps?q=${sosEvent.latitude},${sosEvent.longitude}"
+            MailWorker.enqueue(
+                context.applicationContext,
+                subject,
+                buildSosHtmlBody(
+                    deviceModel = deviceModel,
+                    requestTime = timeFormat.format(Date()),
+                    event = sosEvent,
+                    mapUrl = mapUrl,
+                    amapLink = amapLink,
+                    googleLink = googleLink,
+                    note = locationNote
+                ),
+                isHtml = true
+            )
+        } else {
+            MailWorker.enqueue(context.applicationContext, subject, body.toString())
+        }
         true
     } catch (e: Exception) {
         body.appendLine("当前位置: 获取失败（${e.message ?: "未知错误"}）")
         MailWorker.enqueue(context.applicationContext, subject, body.toString())
         true
     }
+}
+
+private fun buildSosHtmlBody(
+    deviceModel: String,
+    requestTime: String,
+    event: MonitorEvent,
+    mapUrl: String,
+    amapLink: String,
+    googleLink: String,
+    note: String?
+): String {
+    val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+    val latitude = event.latitude ?: 0.0
+    val longitude = event.longitude ?: 0.0
+    val accuracy = event.accuracy?.let { "%.0f米".format(it) } ?: "-"
+    return buildString {
+        appendLine("<!DOCTYPE html><html><body style=\"font-family:sans-serif;color:#333;\">")
+        appendLine("<h3 style=\"color:#d93025;\">SOS 一键求助</h3>")
+        appendLine("<p>收到一键求助请求，请尽快确认被监护人状态。</p>")
+        appendLine("<p><strong>设备：</strong>${escapeHtml(deviceModel)}<br/>")
+        appendLine("<strong>求助时间：</strong>${escapeHtml(requestTime)}</p>")
+        if (!note.isNullOrBlank()) {
+            appendLine("<p style=\"color:#b26a00;\">${escapeHtml(note)}</p>")
+        }
+        appendLine("<div style=\"margin:16px 0;\">")
+        appendLine("<img src=\"$mapUrl\" style=\"max-width:100%;border-radius:8px;border:1px solid #ddd;\" alt=\"SOS位置地图\" />")
+        appendLine("</div>")
+        appendLine("<p><a href=\"$amapLink\" style=\"color:#1a73e8;font-weight:bold;\">点击查看高德地图</a></p>")
+        appendLine("<table style=\"border-collapse:collapse;width:100%;font-size:13px;\">")
+        appendLine("<tr><td style=\"padding:6px 8px;background:#f5f5f5;\">定位时间</td><td style=\"padding:6px 8px;\">${escapeHtml(timeFormat.format(Date(event.timestamp)))}</td></tr>")
+        appendLine("<tr><td style=\"padding:6px 8px;background:#f5f5f5;\">坐标</td><td style=\"padding:6px 8px;\">$latitude, $longitude</td></tr>")
+        appendLine("<tr><td style=\"padding:6px 8px;background:#f5f5f5;\">精度</td><td style=\"padding:6px 8px;\">$accuracy</td></tr>")
+        appendLine("<tr><td style=\"padding:6px 8px;background:#f5f5f5;\">Google Maps</td><td style=\"padding:6px 8px;\"><a href=\"$googleLink\">打开</a></td></tr>")
+        appendLine("</table>")
+        appendLine("<p style=\"margin-top:16px;font-size:12px;color:#999;\">由 SilentGuard 自动发送</p>")
+        appendLine("</body></html>")
+    }
+}
+
+private fun escapeHtml(value: String): String {
+    return value
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
 }
 
 private fun getTodayStartMillis(): Long {
