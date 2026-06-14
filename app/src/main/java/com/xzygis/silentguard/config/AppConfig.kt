@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
+import com.xzygis.silentguard.BuildConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -54,18 +55,31 @@ class AppConfig(private val context: Context) {
         )
     }
 
+    private val defaultConfig: MonitorConfig
+        get() = MonitorConfig(
+            smtpHost = BuildConfig.DEBUG_SMTP_HOST.ifBlank { "smtp.feishu.cn" },
+            smtpPort = BuildConfig.DEBUG_SMTP_PORT,
+            senderEmail = BuildConfig.DEBUG_SENDER_EMAIL,
+            senderPassword = BuildConfig.DEBUG_SENDER_PASSWORD,
+            recipientEmail = BuildConfig.DEBUG_RECIPIENT_EMAIL,
+            amapWebApiKey = BuildConfig.DEBUG_AMAP_WEB_API_KEY
+        )
+
     val configFlow: Flow<MonitorConfig> = context.dataStore.data.map { prefs ->
+        val defaults = defaultConfig
+        val savedSenderPassword = encryptedPrefs.getString("sender_password", "") ?: ""
+        val savedAmapWebApiKey = encryptedPrefs.getString("amap_web_api_key", "") ?: ""
         MonitorConfig(
-            smtpHost = prefs[Keys.SMTP_HOST] ?: "smtp.feishu.cn",
-            smtpPort = prefs[Keys.SMTP_PORT] ?: 465,
-            senderEmail = prefs[Keys.SENDER_EMAIL] ?: "",
-            senderPassword = encryptedPrefs.getString("sender_password", "") ?: "",
-            recipientEmail = prefs[Keys.RECIPIENT_EMAIL] ?: "",
+            smtpHost = prefs[Keys.SMTP_HOST]?.ifBlank { null } ?: defaults.smtpHost,
+            smtpPort = prefs[Keys.SMTP_PORT] ?: defaults.smtpPort,
+            senderEmail = prefs[Keys.SENDER_EMAIL]?.ifBlank { null } ?: defaults.senderEmail,
+            senderPassword = savedSenderPassword.ifBlank { defaults.senderPassword },
+            recipientEmail = prefs[Keys.RECIPIENT_EMAIL]?.ifBlank { null } ?: defaults.recipientEmail,
             locationIntervalMinutes = prefs[Keys.LOCATION_INTERVAL] ?: 5,
             emailIntervalMinutes = prefs[Keys.EMAIL_INTERVAL] ?: 60,
             isGuardingEnabled = prefs[Keys.IS_GUARDING_ENABLED] ?: false,
             useHighAccuracy = prefs[Keys.USE_HIGH_ACCURACY] ?: false,
-            amapWebApiKey = encryptedPrefs.getString("amap_web_api_key", "") ?: ""
+            amapWebApiKey = savedAmapWebApiKey.ifBlank { defaults.amapWebApiKey }
         )
     }
 

@@ -1,4 +1,5 @@
 import com.android.build.gradle.internal.api.BaseVariantOutputImpl
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -34,6 +35,21 @@ fun getVersionName(): String {
     }
 }
 
+val localProperties = Properties().apply {
+    val localFile = rootProject.file("local.properties")
+    if (localFile.exists()) {
+        localFile.inputStream().use { load(it) }
+    }
+}
+
+fun localProperty(name: String, defaultValue: String = ""): String {
+    return localProperties.getProperty(name)?.trim().orEmpty().ifBlank { defaultValue }
+}
+
+fun buildConfigString(value: String): String {
+    return "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+}
+
 android {
     namespace = "com.xzygis.silentguard"
     compileSdk = 34
@@ -60,9 +76,25 @@ android {
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a")
         }
+
+        buildConfigField("String", "DEBUG_SMTP_HOST", buildConfigString(""))
+        buildConfigField("int", "DEBUG_SMTP_PORT", "465")
+        buildConfigField("String", "DEBUG_SENDER_EMAIL", buildConfigString(""))
+        buildConfigField("String", "DEBUG_SENDER_PASSWORD", buildConfigString(""))
+        buildConfigField("String", "DEBUG_RECIPIENT_EMAIL", buildConfigString(""))
+        buildConfigField("String", "DEBUG_AMAP_WEB_API_KEY", buildConfigString(""))
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "DEBUG_SMTP_HOST", buildConfigString(localProperty("silentguard.smtpHost")))
+            buildConfigField("int", "DEBUG_SMTP_PORT", localProperty("silentguard.smtpPort", "465").toIntOrNull()?.toString() ?: "465")
+            buildConfigField("String", "DEBUG_SENDER_EMAIL", buildConfigString(localProperty("silentguard.senderEmail")))
+            buildConfigField("String", "DEBUG_SENDER_PASSWORD", buildConfigString(localProperty("silentguard.senderPassword")))
+            buildConfigField("String", "DEBUG_RECIPIENT_EMAIL", buildConfigString(localProperty("silentguard.recipientEmail")))
+            buildConfigField("String", "DEBUG_AMAP_WEB_API_KEY", buildConfigString(localProperty("silentguard.amapWebApiKey")))
+        }
+
         release {
             isMinifyEnabled = false
             proguardFiles(
@@ -85,6 +117,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
