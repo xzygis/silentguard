@@ -2,6 +2,7 @@ package com.xzygis.silentguard.mail
 
 import android.content.Context
 import android.util.Log
+import com.xzygis.silentguard.BuildConfig
 import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.data.AppDatabase
 import com.xzygis.silentguard.data.MailSendRecord
@@ -54,7 +55,7 @@ class MailSender(private val context: Context) {
                         return PasswordAuthentication(config.senderEmail, config.senderPassword)
                     }
                 })
-                session.debug = true
+                session.debug = BuildConfig.DEBUG
 
                 val message = MimeMessage(session).apply {
                     setFrom(InternetAddress(config.senderEmail))

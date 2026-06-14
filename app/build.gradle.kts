@@ -42,8 +42,14 @@ val localProperties = Properties().apply {
     }
 }
 
+val hasSilentGuardLocalConfig = localProperties.stringPropertyNames().any { it.startsWith("silentguard.") }
+
 fun localProperty(name: String, defaultValue: String = ""): String {
     return localProperties.getProperty(name)?.trim().orEmpty().ifBlank { defaultValue }
+}
+
+fun localBooleanProperty(name: String, defaultValue: Boolean): Boolean {
+    return localProperty(name).ifBlank { defaultValue.toString() }.toBooleanStrictOrNull() ?: defaultValue
 }
 
 fun buildConfigString(value: String): String {
@@ -83,6 +89,7 @@ android {
         buildConfigField("String", "DEBUG_SENDER_PASSWORD", buildConfigString(""))
         buildConfigField("String", "DEBUG_RECIPIENT_EMAIL", buildConfigString(""))
         buildConfigField("String", "DEBUG_AMAP_WEB_API_KEY", buildConfigString(""))
+        buildConfigField("boolean", "DEBUG_CONFIG_OVERRIDE", "false")
     }
 
     buildTypes {
@@ -93,6 +100,11 @@ android {
             buildConfigField("String", "DEBUG_SENDER_PASSWORD", buildConfigString(localProperty("silentguard.senderPassword")))
             buildConfigField("String", "DEBUG_RECIPIENT_EMAIL", buildConfigString(localProperty("silentguard.recipientEmail")))
             buildConfigField("String", "DEBUG_AMAP_WEB_API_KEY", buildConfigString(localProperty("silentguard.amapWebApiKey")))
+            buildConfigField(
+                "boolean",
+                "DEBUG_CONFIG_OVERRIDE",
+                localBooleanProperty("silentguard.debugConfigOverride", hasSilentGuardLocalConfig).toString()
+            )
         }
 
         release {

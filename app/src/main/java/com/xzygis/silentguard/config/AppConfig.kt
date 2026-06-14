@@ -65,21 +65,28 @@ class AppConfig(private val context: Context) {
             amapWebApiKey = BuildConfig.DEBUG_AMAP_WEB_API_KEY
         )
 
+    private fun chooseConfigValue(savedValue: String?, debugValue: String): String {
+        if (BuildConfig.DEBUG_CONFIG_OVERRIDE && debugValue.isNotBlank()) {
+            return debugValue
+        }
+        return savedValue?.ifBlank { null } ?: debugValue
+    }
+
     val configFlow: Flow<MonitorConfig> = context.dataStore.data.map { prefs ->
         val defaults = defaultConfig
         val savedSenderPassword = encryptedPrefs.getString("sender_password", "") ?: ""
         val savedAmapWebApiKey = encryptedPrefs.getString("amap_web_api_key", "") ?: ""
         MonitorConfig(
-            smtpHost = prefs[Keys.SMTP_HOST]?.ifBlank { null } ?: defaults.smtpHost,
-            smtpPort = prefs[Keys.SMTP_PORT] ?: defaults.smtpPort,
-            senderEmail = prefs[Keys.SENDER_EMAIL]?.ifBlank { null } ?: defaults.senderEmail,
-            senderPassword = savedSenderPassword.ifBlank { defaults.senderPassword },
-            recipientEmail = prefs[Keys.RECIPIENT_EMAIL]?.ifBlank { null } ?: defaults.recipientEmail,
+            smtpHost = chooseConfigValue(prefs[Keys.SMTP_HOST], defaults.smtpHost).ifBlank { "smtp.feishu.cn" },
+            smtpPort = if (BuildConfig.DEBUG_CONFIG_OVERRIDE) defaults.smtpPort else prefs[Keys.SMTP_PORT] ?: defaults.smtpPort,
+            senderEmail = chooseConfigValue(prefs[Keys.SENDER_EMAIL], defaults.senderEmail),
+            senderPassword = chooseConfigValue(savedSenderPassword, defaults.senderPassword),
+            recipientEmail = chooseConfigValue(prefs[Keys.RECIPIENT_EMAIL], defaults.recipientEmail),
             locationIntervalMinutes = prefs[Keys.LOCATION_INTERVAL] ?: 5,
             emailIntervalMinutes = prefs[Keys.EMAIL_INTERVAL] ?: 60,
             isGuardingEnabled = prefs[Keys.IS_GUARDING_ENABLED] ?: false,
             useHighAccuracy = prefs[Keys.USE_HIGH_ACCURACY] ?: false,
-            amapWebApiKey = savedAmapWebApiKey.ifBlank { defaults.amapWebApiKey }
+            amapWebApiKey = chooseConfigValue(savedAmapWebApiKey, defaults.amapWebApiKey)
         )
     }
 
