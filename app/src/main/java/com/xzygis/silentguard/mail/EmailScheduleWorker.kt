@@ -13,6 +13,7 @@ import androidx.work.WorkerParameters
 import com.xzygis.silentguard.data.AppDatabase
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.config.AppConfig
+import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.location.AmapCoordinateConverter
 import com.xzygis.silentguard.location.AmapReverseGeocoder
 import java.text.SimpleDateFormat
@@ -51,33 +52,21 @@ class EmailScheduleWorker(
         fun cancel(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
         }
-    }
 
-    override suspend fun doWork(): Result {
-        return try {
-            val dao = AppDatabase.getInstance(applicationContext).monitorEventDao()
-            val pendingEvents = dao.getPendingLocationEvents()
-            if (pendingEvents.isEmpty()) return Result.success()
-
-            // 获取当天所有轨迹点用于邮件展示
-            val startOfToday = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, 0)
-                set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-            }.timeInMillis
-            val todayEvents = dao.getTodayLocationEvents(startOfToday)
-            val displayEvents = todayEvents.ifEmpty { pendingEvents }
-
+        suspend fun sendLocationReport(
+            context: Context,
+            events: List<MonitorEvent>,
+            periodLabel: String = "今日"
+        ): Boolean {
             val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-            val appConfig = AppConfig(applicationContext)
+            val appConfig = AppConfig(context)
             val config = appConfig.getConfig()
-            val mapUrl = StaticMapUrlBuilder.buildUrl(applicationContext, displayEvents, config.amapWebApiKey)
-            val addressByEventId = displayEvents.associate { event ->
+            val mapUrl = StaticMapUrlBuilder.buildUrl(context, events, config.amapWebApiKey)
+            val addressByEventId = events.associate { event ->
                 val existingAddress = AmapReverseGeocoder.extractAddress(event.detail)
                 val resolvedAddress = if (existingAddress == null && event.latitude != null && event.longitude != null) {
                     AmapReverseGeocoder.resolveAddress(
-                        context = applicationContext,
+                        context = context,
                         apiKey = config.amapWebApiKey,
                         latitude = event.latitude,
                         longitude = event.longitude
@@ -88,24 +77,24 @@ class EmailScheduleWorker(
                 event.id to resolvedAddress
             }
 
-            val subject = "[${Build.MANUFACTURER} ${Build.MODEL}] ${displayEvents.size}条位置记录（今日）"
+            val subject = "[${Build.MANUFACTURER} ${Build.MODEL}] ${events.size}条位置记录（$periodLabel）"
 
-            val mailSent = if (mapUrl != null) {
+            return if (mapUrl != null) {
                 // HTML 邮件：内嵌地图 + 位置详情
                 val htmlBody = buildString {
                     appendLine("<!DOCTYPE html><html><body style=\"font-family:sans-serif;color:#333;\">")
                     appendLine("<h3 style=\"color:#1a73e8;\">📍 位置轨迹报告</h3>")
-                    appendLine("<p>共 ${displayEvents.size} 个位置点（今日）</p>")
+                    appendLine("<p>共 ${events.size} 个位置点（$periodLabel）</p>")
                     appendLine("<div style=\"margin:16px 0;\">")
                     appendLine("<img src=\"$mapUrl\" style=\"max-width:100%;border-radius:8px;border:1px solid #ddd;\" alt=\"轨迹地图\" />")
                     appendLine("</div>")
                     appendLine("<table style=\"border-collapse:collapse;width:100%;font-size:13px;\">")
                     appendLine("<tr style=\"background:#f5f5f5;\"><th style=\"padding:8px;text-align:left;\">#</th><th style=\"padding:8px;text-align:left;\">时间</th><th style=\"padding:8px;text-align:left;\">地址</th><th style=\"padding:8px;text-align:left;\">坐标</th><th style=\"padding:8px;text-align:left;\">精度</th></tr>")
-                    displayEvents.forEachIndexed { index, event ->
+                    events.forEachIndexed { index, event ->
                         val bgColor = if (index % 2 == 0) "#fff" else "#f9f9f9"
                         val time = timeFormat.format(Date(event.timestamp))
                         val amapLatLng = if (event.latitude != null && event.longitude != null) {
-                            AmapCoordinateConverter.toAmapLatLng(applicationContext, event.latitude, event.longitude)
+                            AmapCoordinateConverter.toAmapLatLng(context, event.latitude, event.longitude)
                         } else {
                             null
                         }
@@ -133,11 +122,15 @@ class EmailScheduleWorker(
                     appendLine("<p style=\"margin-top:16px;font-size:12px;color:#999;\">由 SilentGuard 自动发送</p>")
                     appendLine("</body></html>")
                 }
-                MailSender(applicationContext).sendMail(subject, htmlBody, isHtml = true)
+                MailSender(context).sendMail(subject, htmlBody, isHtml = true)
             } else {
                 // 降级：纯文本邮件（未配置高德 Key）
                 val body = buildString {
-                    displayEvents.forEach { event ->
+                    if (events.isEmpty()) {
+                        appendLine("共 0 个位置点（$periodLabel）")
+                        appendLine()
+                    }
+                    events.forEach { event ->
                         val address = addressByEventId[event.id]
                         appendLine("--- ${timeFormat.format(Date(event.timestamp))} ---")
                         if (address != null && AmapReverseGeocoder.extractAddress(event.detail) == null) {
@@ -147,8 +140,36 @@ class EmailScheduleWorker(
                         appendLine()
                     }
                 }
-                MailSender(applicationContext).sendMail(subject, body)
+                MailSender(context).sendMail(subject, body)
             }
+        }
+
+        private fun escapeHtml(value: String): String {
+            return value
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+        }
+    }
+
+    override suspend fun doWork(): Result {
+        return try {
+            val dao = AppDatabase.getInstance(applicationContext).monitorEventDao()
+            val pendingEvents = dao.getPendingLocationEvents()
+            if (pendingEvents.isEmpty()) return Result.success()
+
+            // 获取当天所有轨迹点用于邮件展示
+            val startOfToday = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            val todayEvents = dao.getTodayLocationEvents(startOfToday)
+            val displayEvents = todayEvents.ifEmpty { pendingEvents }
+
+            val mailSent = sendLocationReport(applicationContext, displayEvents)
 
             if (!mailSent) {
                 Log.w(TAG, "位置邮件发送失败，保留${pendingEvents.size}条记录为待发送")
@@ -166,11 +187,4 @@ class EmailScheduleWorker(
         }
     }
 
-    private fun escapeHtml(value: String): String {
-        return value
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-    }
 }

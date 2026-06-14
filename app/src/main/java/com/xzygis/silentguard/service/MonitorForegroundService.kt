@@ -565,30 +565,7 @@ class MonitorForegroundService : Service() {
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
         val todayEvents = dao.getTodayLocationEvents(startOfToday)
-        val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
-        val subject = if (todayEvents.isEmpty()) {
-            "[$deviceModel] 每日位置汇总 - 今日无轨迹点"
-        } else {
-            "[$deviceModel] 每日位置汇总 - ${todayEvents.size}条记录"
-        }
-
-        val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-        val body = if (todayEvents.isEmpty()) {
-            "今日设备未产生任何位置记录。设备可能处于静止状态或服务未正常运行。\n\n设备: $deviceModel\n报告时间: ${timeFormat.format(Date())}"
-        } else {
-            buildString {
-                appendLine("设备: $deviceModel")
-                appendLine("今日共 ${todayEvents.size} 条位置记录")
-                appendLine()
-                todayEvents.forEach { event ->
-                    appendLine("--- ${timeFormat.format(Date(event.timestamp))} ---")
-                    appendLine(event.detail)
-                    appendLine()
-                }
-            }
-        }
-
-        val sent = MailSender(this).sendMail(subject, body)
+        val sent = EmailScheduleWorker.sendLocationReport(this, todayEvents)
         if (sent) {
             Log.d(TAG, "每日汇总邮件发送成功")
         } else {

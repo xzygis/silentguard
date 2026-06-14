@@ -234,16 +234,16 @@ private fun EmergencySosCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = !isSending) { onSend() },
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(20.dp),
         color = if (mailConfigured) ErrorSurface else WarningSurface
     ) {
         Row(
-            modifier = Modifier.padding(18.dp),
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(46.dp)
+                    .size(50.dp)
                     .clip(CircleShape)
                     .background(if (mailConfigured) Error else Warning),
                 contentAlignment = Alignment.Center
@@ -258,27 +258,21 @@ private fun EmergencySosCard(
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (isSending) "正在发送求助…" else "一键求助",
+                    text = if (isSending) "正在发送 SOS" else "SOS 一键求助",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = if (mailConfigured) {
-                        "立即发送当前位置、设备型号和时间到监护邮箱"
+                        "点击立即发送当前位置"
                     } else {
-                        "请先配置邮箱后再使用"
+                        "请先配置邮箱"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Text(
-                text = if (isSending) "发送中" else "发送",
-                style = MaterialTheme.typography.labelLarge,
-                color = if (mailConfigured) Error else Warning,
-                fontWeight = FontWeight.SemiBold
-            )
         }
     }
 }
