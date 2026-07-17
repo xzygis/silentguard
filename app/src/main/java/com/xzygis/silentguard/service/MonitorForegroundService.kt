@@ -19,10 +19,6 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
 import com.xzygis.silentguard.MainActivity
 import com.xzygis.silentguard.R
 import com.xzygis.silentguard.config.AppConfig
@@ -31,6 +27,7 @@ import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
 import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.location.AmapReverseGeocoder
+import com.xzygis.silentguard.location.DeviceLocationProvider
 import com.xzygis.silentguard.mail.EmailScheduleWorker
 import com.xzygis.silentguard.mail.MailSender
 import com.xzygis.silentguard.receiver.ServiceWatchdogReceiver
@@ -65,7 +62,6 @@ class MonitorForegroundService : Service() {
         private const val LOW_BATTERY_RECOVERY_PERCENT = 15
     }
 
-    private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var appConfig: AppConfig
     private lateinit var wakeLock: PowerManager.WakeLock
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -85,7 +81,6 @@ class MonitorForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         appConfig = AppConfig(this)
         createNotificationChannel()
         initWakeLock()
@@ -267,19 +262,8 @@ class MonitorForegroundService : Service() {
         }
 
         try {
-            val priority = if (useHighAccuracy) {
-                Priority.PRIORITY_HIGH_ACCURACY
-            } else {
-                Priority.PRIORITY_BALANCED_POWER_ACCURACY
-            }
-
-            val cancellationToken = CancellationTokenSource()
-            val location: Location? = try {
-                fusedLocationClient.getCurrentLocation(priority, cancellationToken.token).await()
-            } catch (e: Exception) {
-                Log.w(TAG, "getCurrentLocation 失败，尝试 lastLocation: ${e.message}")
-                fusedLocationClient.lastLocation.await()
-            }
+            // 优先 GMS，无 GMS 设备（如华为）自动降级到系统定位
+            val location: Location? = DeviceLocationProvider.getCurrentLocation(this, useHighAccuracy)
 
             if (location == null) {
                 Log.w(TAG, "无法获取位置")

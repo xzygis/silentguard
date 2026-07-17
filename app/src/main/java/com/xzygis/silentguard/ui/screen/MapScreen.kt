@@ -10,9 +10,6 @@ import android.graphics.Typeface
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.GradientDrawable
 import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
-import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.widget.LinearLayout
@@ -53,9 +50,6 @@ import com.amap.api.maps.model.LatLng
 import com.amap.api.maps.model.Marker
 import com.amap.api.maps.model.MarkerOptions
 import com.amap.api.maps.model.PolylineOptions
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
 import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
@@ -63,16 +57,13 @@ import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.data.MonitorEventDao
 import com.xzygis.silentguard.location.AmapCoordinateConverter
 import com.xzygis.silentguard.location.AmapReverseGeocoder
+import com.xzygis.silentguard.location.DeviceLocationProvider
 import com.xzygis.silentguard.ui.component.AMapView
 import com.xzygis.silentguard.ui.theme.*
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import kotlin.coroutines.resume
 
 private enum class TimeRange(val label: String, val days: Int) {
     TODAY("今天", 0),
@@ -265,82 +256,7 @@ private fun renderTrackOnMap(
 }
 
 private suspend fun getCurrentDeviceLocation(context: Context): Location? {
-    getGmsLocation(context)?.let { return it }
-    return getSystemLocation(context)
-}
-
-private suspend fun getGmsLocation(context: Context): Location? {
-    val gmsAvailable = try {
-        com.google.android.gms.common.GoogleApiAvailability.getInstance()
-            .isGooglePlayServicesAvailable(context) == com.google.android.gms.common.ConnectionResult.SUCCESS
-    } catch (e: Exception) {
-        false
-    }
-
-    if (!gmsAvailable) {
-        Log.w("MapScreen", "Google Play Services 不可用，改用系统定位")
-        return null
-    }
-
-    return try {
-        val fusedClient = LocationServices.getFusedLocationProviderClient(context)
-        fusedClient.lastLocation.await() ?: fusedClient.getCurrentLocation(
-            Priority.PRIORITY_BALANCED_POWER_ACCURACY,
-            CancellationTokenSource().token
-        ).await()
-    } catch (e: Exception) {
-        Log.w("MapScreen", "GMS 定位失败，改用系统定位: ${e.message}")
-        null
-    }
-}
-
-private suspend fun getSystemLocation(context: Context): Location? {
-    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-        ?: return null
-
-    return try {
-        val providers = locationManager.getProviders(true)
-        val lastLocation = providers
-            .mapNotNull { provider -> locationManager.getLastKnownLocation(provider) }
-            .maxByOrNull { it.time }
-
-        lastLocation ?: withTimeoutOrNull(10_000L) {
-            suspendCancellableCoroutine { continuation ->
-                val provider = when {
-                    locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-                    locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-                    else -> providers.firstOrNull()
-                }
-
-                if (provider == null) {
-                    continuation.resume(null)
-                    return@suspendCancellableCoroutine
-                }
-
-                var resumed = false
-                val listener = object : LocationListener {
-                    override fun onLocationChanged(location: Location) {
-                        if (!resumed) {
-                            resumed = true
-                            continuation.resume(location)
-                            locationManager.removeUpdates(this)
-                        }
-                    }
-                }
-
-                continuation.invokeOnCancellation {
-                    locationManager.removeUpdates(listener)
-                }
-                locationManager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
-            }
-        }
-    } catch (e: SecurityException) {
-        Log.w("MapScreen", "系统定位失败：缺少定位权限")
-        null
-    } catch (e: Exception) {
-        Log.w("MapScreen", "系统定位失败: ${e.message}")
-        null
-    }
+    return DeviceLocationProvider.getCurrentLocation(context)
 }
 
 private fun isNearLastLocation(location: Location, lastEvent: MonitorEvent?): Boolean {
