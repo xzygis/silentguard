@@ -1,5 +1,6 @@
 package com.xzygis.silentguard.location
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
 import android.location.LocationListener
@@ -40,6 +41,7 @@ object DeviceLocationProvider {
         return getSystemLocation(context)
     }
 
+    @SuppressLint("MissingPermission") // 调用方负责在获取定位权限后调用，内部亦已捕获 SecurityException
     private suspend fun getGmsLocation(context: Context, highAccuracy: Boolean): Location? {
         val gmsAvailable = try {
             GoogleApiAvailability.getInstance()
