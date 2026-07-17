@@ -10,6 +10,8 @@
     <!-- SMS -->
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <!-- SMS 权限隐含 telephony 硬件，声明为非必需以兼容平板/ChromeOS 等无电话硬件设备 -->
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <!-- Location -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
