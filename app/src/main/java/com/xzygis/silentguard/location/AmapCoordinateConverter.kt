@@ -10,6 +10,7 @@ object AmapCoordinateConverter {
 
     fun toAmapLatLng(context: Context, latitude: Double, longitude: Double): LatLng {
         val gpsLatLng = LatLng(latitude, longitude)
+        if (!com.xzygis.silentguard.config.MapPrivacy.initialize(context)) return gpsLatLng
         return try {
             CoordinateConverter(context.applicationContext).apply {
                 from(CoordinateConverter.CoordType.GPS)

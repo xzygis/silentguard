@@ -39,11 +39,18 @@ fun AMapView(
     onMapReady: (AMap) -> Unit = {}
 ) {
     val context = LocalContext.current
+    if (!com.xzygis.silentguard.config.MapPrivacy.isAllowed(context)) {
+        Box(modifier, contentAlignment = Alignment.Center) {
+            Text("地图服务未启用，请在设置中阅读说明并选择是否同意高德服务。")
+        }
+        return
+    }
     var mapError by remember { mutableStateOf(false) }
 
     Log.d(TAG, "[init] AMapView Composable 开始组合")
 
     val mapView = remember {
+        com.xzygis.silentguard.config.MapPrivacy.initialize(context)
         Log.d(TAG, "[init] 开始创建 MapView 实例")
         try {
             val view = MapView(context)
@@ -190,6 +197,7 @@ private fun MapLifecycle(mapView: MapView) {
             Log.d(TAG, "[lifecycle] 生命周期观察者已移除，MapView 销毁")
             lifecycle.removeObserver(observer)
             context.unregisterComponentCallbacks(callbacks)
+            mapView.onDestroy()
         }
     }
 }

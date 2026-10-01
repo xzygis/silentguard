@@ -13,6 +13,8 @@ import com.xzygis.silentguard.data.AppDatabase
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
 import com.xzygis.silentguard.data.MonitorEvent
+import com.xzygis.silentguard.data.SmsIdentity
+import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.mail.MailWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,9 +50,6 @@ class SmsNotificationListenerService : NotificationListenerService() {
             "com.meizu.mms",               // 魅族短信
         )
 
-        // 用于去重，记录最近处理的短信ID
-        @Volatile
-        private var lastProcessedSmsId: Long = -1L
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -85,12 +84,11 @@ class SmsNotificationListenerService : NotificationListenerService() {
             return
         }
 
-        Log.d(TAG, "检测到短信通知 - 包名: $pkg, 标题: $title, 内容预览: ${text?.take(20)}")
-
         scope.launch {
             try {
+                if (!AppConfig(applicationContext).getConfig().isGuardingEnabled) return@launch
                 // 优先通过 ContentResolver 读取最新短信完整内容
-                val smsData = readLatestSmsFromInbox()
+                val smsData = readLatestSmsFromInbox(title.orEmpty(), text.orEmpty(), sbn.postTime)
 
                 val sender: String
                 val smsBody: String
@@ -112,8 +110,6 @@ class SmsNotificationListenerService : NotificationListenerService() {
                     return@launch
                 }
 
-                val dao = AppDatabase.getInstance(applicationContext).monitorEventDao()
-
                 val subject = "[短信] 来自: $sender"
                 val body = buildString {
                     appendLine("发送者: $sender")
@@ -127,15 +123,16 @@ class SmsNotificationListenerService : NotificationListenerService() {
                     title = "来自 $sender",
                     summary = smsBody.take(100),
                     detail = body,
-                    status = EventStatus.PENDING
+                    status = EventStatus.PENDING,
+                    sourceKey = if (smsData != null) SmsIdentity.key("inbox", smsData.id.toString(), "", 0)
+                    else SmsIdentity.key("notification:${sbn.key}", sender, smsBody,
+                        sbn.notification.`when`.takeIf { it > 0 } ?: sbn.postTime)
                 )
 
-                val eventId = dao.insert(event)
-                MailWorker.enqueue(applicationContext, subject, body)
-                dao.updateStatus(eventId, EventStatus.SENT)
-                Log.d(TAG, "短信已记录并入队发送: $sender")
+                MailWorker.enqueue(applicationContext, subject, body, newEvent = event)
+                Log.d(TAG, "短信通知已处理")
             } catch (e: Exception) {
-                Log.e(TAG, "处理短信通知失败: ${e.message}", e)
+                Log.e(TAG, "处理短信通知失败: ${e.javaClass.simpleName}")
             }
         }
     }
@@ -144,7 +141,7 @@ class SmsNotificationListenerService : NotificationListenerService() {
      * 通过 ContentResolver 读取短信收件箱中最新一条短信。
      * 需要 READ_SMS 权限。
      */
-    private fun readLatestSmsFromInbox(): SmsData? {
+    private fun readLatestSmsFromInbox(senderTitle: String, preview: String, postedTime: Long): SmsData? {
         if (ContextCompat.checkSelfPermission(applicationContext, android.Manifest.permission.READ_SMS)
             != PackageManager.PERMISSION_GRANTED) {
             Log.d(TAG, "无 READ_SMS 权限，无法直接读取短信")
@@ -156,34 +153,29 @@ class SmsNotificationListenerService : NotificationListenerService() {
             cursor = contentResolver.query(
                 Uri.parse("content://sms/inbox"),
                 arrayOf("_id", "address", "body", "date"),
-                null,
-                null,
-                "date DESC LIMIT 1"
+                "date BETWEEN ? AND ?",
+                arrayOf((postedTime - 120_000).toString(), (postedTime + 120_000).toString()),
+                "date DESC"
             )
-            if (cursor != null && cursor.moveToFirst()) {
+            while (cursor != null && cursor.moveToNext()) {
                 val id = cursor.getLong(cursor.getColumnIndexOrThrow("_id"))
-                // 去重：避免同一条短信被重复处理
-                if (id == lastProcessedSmsId) {
-                    Log.d(TAG, "短信ID重复($id)，跳过")
-                    return null
-                }
-                lastProcessedSmsId = id
-
                 val address = cursor.getString(cursor.getColumnIndexOrThrow("address")) ?: "未知号码"
+                if (address != senderTitle) continue
                 val body = cursor.getString(cursor.getColumnIndexOrThrow("body")) ?: ""
                 val date = cursor.getLong(cursor.getColumnIndexOrThrow("date"))
+                if (!SmsIdentity.matchesNotification(body, preview, date, postedTime)) continue
                 val timeStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(date))
-                return SmsData(address, body, timeStr)
+                return SmsData(id, address, body, timeStr)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "读取短信收件箱失败: ${e.message}", e)
+            Log.e(TAG, "读取短信收件箱失败: ${e.javaClass.simpleName}")
         } finally {
             cursor?.close()
         }
         return null
     }
 
-    private data class SmsData(val address: String, val body: String, val time: String)
+    private data class SmsData(val id: Long, val address: String, val body: String, val time: String)
 
     private fun isAllowedSmsPackage(packageName: String): Boolean {
         val defaultSmsPackage = Telephony.Sms.getDefaultSmsPackage(applicationContext)

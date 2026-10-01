@@ -21,7 +21,7 @@ object AmapReverseGeocoder {
         latitude: Double,
         longitude: Double
     ): String? {
-        if (apiKey.isBlank()) return null
+        if (apiKey.isBlank() || !com.xzygis.silentguard.config.MapPrivacy.initialize(context)) return null
 
         return withContext(Dispatchers.IO) {
             try {
@@ -51,7 +51,7 @@ object AmapReverseGeocoder {
                         ?.takeIf { it.isNotBlank() }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "逆地理编码异常: ${e.message}")
+                Log.w(TAG, "逆地理编码失败: ${e.javaClass.simpleName}")
                 null
             }
         }

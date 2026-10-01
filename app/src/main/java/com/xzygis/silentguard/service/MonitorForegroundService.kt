@@ -28,18 +28,24 @@ import com.xzygis.silentguard.data.EventType
 import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.location.AmapReverseGeocoder
 import com.xzygis.silentguard.location.DeviceLocationProvider
+import com.xzygis.silentguard.location.LocationPolicy
+import com.xzygis.silentguard.diagnostics.AppDiagnostics
 import com.xzygis.silentguard.mail.EmailScheduleWorker
 import com.xzygis.silentguard.mail.MailSender
+import com.xzygis.silentguard.mail.MailWorker
+import com.xzygis.silentguard.diagnostics.GuardHealth
 import com.xzygis.silentguard.receiver.ServiceWatchdogReceiver
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -66,13 +72,23 @@ class MonitorForegroundService : Service() {
     private lateinit var wakeLock: PowerManager.WakeLock
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastRecordedLocation: Location? = null
-    private var lastLocationFixMillis = System.currentTimeMillis()
-    private var lastLocationAlertMillis = 0L
-    private var lastLowBatteryAlertMillis = 0L
-    private var lowBatteryAlertActive = false
+    @Volatile private var lastLocationFixElapsed = SystemClock.elapsedRealtime()
+    @Volatile private var nextLocationAttemptElapsed = 0L
+    @Volatile private var healthyNextAttemptElapsed = 0L
+    @Volatile private var lastLocationAttemptStatus = "尚未尝试定位"
+    private val alertPrefs by lazy { getSharedPreferences("alert_schedule", Context.MODE_PRIVATE) }
+    private var lastLocationAlertMillis: Long
+        get() = alertPrefs.getLong("location_alert", 0)
+        set(value) { alertPrefs.edit().putLong("location_alert", value).apply() }
+    private var lastLowBatteryAlertMillis: Long
+        get() = alertPrefs.getLong("battery_alert", 0)
+        set(value) { alertPrefs.edit().putLong("battery_alert", value).apply() }
     private var isLocationLoopRunning = false
+    private enum class LocationOutcome { MOVED, STATIONARY, FAILED }
     // 自适应间隔：连续未移动次数
     private var stationaryCount = 0
+    private var failureCount = 0
+    private lateinit var health: GuardHealth
     private val MAX_INTERVAL_MULTIPLIER = 2
     // 静止状态开始时间，用于最大静止时长重置
     private var stationarySinceMillis = 0L
@@ -82,21 +98,39 @@ class MonitorForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         appConfig = AppConfig(this)
+        health = GuardHealth(this)
+        if (health.lastFix > 0) {
+            lastLocationFixElapsed = SystemClock.elapsedRealtime() -
+                (System.currentTimeMillis() - health.lastFix).coerceAtLeast(0)
+        }
         createNotificationChannel()
         initWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = buildNotification()
-        startForeground(NOTIFICATION_ID, notification)
+        try {
+            startForeground(NOTIFICATION_ID, notification)
+        } catch (e: RuntimeException) {
+            health.startError = "前台服务启动受限，请检查定位权限"
+            stopSelf()
+            return START_NOT_STICKY
+        }
         // 防止 START_STICKY 重启或重复调用导致多个循环并发
         if (!isLocationLoopRunning) {
             isLocationLoopRunning = true
             startLocationPollingLoop()
             startEmailScheduler()
-            startEmailCheckLoop()
-            startDailySummaryScheduler()
+            com.xzygis.silentguard.mail.DailySummaryWorker.schedule(this)
             startLocationHealthCheckLoop()
+            serviceScope.launch {
+                while (isActive) {
+                    if (!appConfig.getConfig().isGuardingEnabled) { stopSelf(); break }
+                    health.heartbeat = System.currentTimeMillis()
+                    delay(60_000)
+                }
+            }
+            serviceScope.launch { MailWorker.recover(this@MonitorForegroundService) }
         }
         // 设置 AlarmManager 兜底唤醒
         scheduleWatchdogAlarm()
@@ -118,7 +152,7 @@ class MonitorForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        alarmManager.setExactAndAllowWhileIdle(
+        alarmManager.setAndAllowWhileIdle(
             AlarmManager.ELAPSED_REALTIME_WAKEUP,
             SystemClock.elapsedRealtime() + 1000,
             pendingIntent
@@ -127,7 +161,7 @@ class MonitorForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        EmailScheduleWorker.cancel(this)
+        health.heartbeat = 0
         releaseWakeLock()
         serviceScope.cancel()
     }
@@ -176,12 +210,11 @@ class MonitorForegroundService : Service() {
     private fun startLocationPollingLoop() {
         serviceScope.launch {
             try {
-                val config = appConfig.configFlow.first()
-                val baseIntervalMinutes = config.locationIntervalMinutes
-                val useHighAccuracy = config.useHighAccuracy
-                Log.d(TAG, "启动间歇式定位循环: 基础间隔=${baseIntervalMinutes}分钟, 高精度=$useHighAccuracy")
-
                 while (isActive) {
+                    val config = appConfig.getConfig()
+                    if (!config.isGuardingEnabled) { stopSelf(); break }
+                    val baseIntervalMinutes = config.locationIntervalMinutes
+                    val useHighAccuracy = config.useHighAccuracy
                     // 静止超时重置：超过最大静止持续时间后，重置计数恢复正常频率
                     if (stationaryCount > 0 && stationarySinceMillis > 0) {
                         val stationaryDuration = System.currentTimeMillis() - stationarySinceMillis
@@ -215,12 +248,14 @@ class MonitorForegroundService : Service() {
 
                     // 仅在定位期间持有 WakeLock
                     acquireWakeLock()
-                    val moved = fetchAndRecordLocation(effectiveHighAccuracy)
-                    releaseWakeLock()
-                    checkAndSendLowBatteryAlert()
+                    val outcome = try {
+                        fetchAndRecordLocation(effectiveHighAccuracy)
+                    } finally {
+                        releaseWakeLock()
+                    }
 
-                    // 更新静止计数
-                    if (moved) {
+                    // 定位失败不能证明设备静止，恢复正常采样频率并尽快重试。
+                    if (outcome != LocationOutcome.STATIONARY) {
                         stationaryCount = 0
                         stationarySinceMillis = 0L
                     } else {
@@ -230,12 +265,29 @@ class MonitorForegroundService : Service() {
                         stationaryCount = minOf(stationaryCount + 1, 3)
                     }
 
-                    val delayMillis = actualInterval * 60 * 1000L
-                    Log.d(TAG, "下次定位将在 ${actualInterval} 分钟后 (夜间=${isNightTime()}, 静止次数=$stationaryCount, 倍率=$multiplier, 强制高精度=$forceHighAccuracy)")
-                    delay(delayMillis)
+                    val successfulInterval = if (outcome == LocationOutcome.MOVED) nightAdjusted else actualInterval
+                    failureCount = if (outcome == LocationOutcome.FAILED) (failureCount + 1).coerceAtMost(5) else 0
+                    val prerequisitesMissing = !AppDiagnostics.hasLocationPermission(this@MonitorForegroundService) ||
+                        !androidx.core.location.LocationManagerCompat.isLocationEnabled(
+                            getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager)
+                    val delayMillis = if (outcome == LocationOutcome.FAILED) {
+                        if (prerequisitesMissing) 15 * 60_000L else (60_000L shl (failureCount - 1)).coerceAtMost(5 * 60_000L)
+                    } else LocationPolicy.nextDelayMillis(
+                        outcome != LocationOutcome.FAILED, successfulInterval
+                    )
+                    nextLocationAttemptElapsed = SystemClock.elapsedRealtime() + delayMillis
+                    // 仅正常采样间隔可以推迟告警；失败后的快速重试不能持续压制告警。
+                    healthyNextAttemptElapsed = if (outcome == LocationOutcome.FAILED) 0L else nextLocationAttemptElapsed
+                    Log.d(TAG, "下次定位将在 ${delayMillis / 60000} 分钟后 (结果=$outcome, 夜间=${isNightTime()}, 静止次数=$stationaryCount)")
+                    checkAndSendLowBatteryAlert()
+                    withTimeoutOrNull((nextLocationAttemptElapsed - SystemClock.elapsedRealtime()).coerceAtLeast(1L)) {
+                        appConfig.configFlow.filter { it != config }.first()
+                    }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.e(TAG, "定位循环异常: ${e.message}", e)
+                Log.e(TAG, "定位循环异常: ${e.javaClass.simpleName}")
                 isLocationLoopRunning = false
                 // 延迟重试
                 delay(30_000L)
@@ -249,38 +301,45 @@ class MonitorForegroundService : Service() {
 
     /**
      * 单次定位 + 去重 + 记录
-     * @return true 表示位置有变化（已记录），false 表示位置未变化或获取失败
+     * 区分位置变化、位置静止与失败，避免把定位故障当作静止而降低采样频率。
      */
-    private suspend fun fetchAndRecordLocation(useHighAccuracy: Boolean): Boolean {
+    private suspend fun fetchAndRecordLocation(useHighAccuracy: Boolean): LocationOutcome {
+        if (!appConfig.getConfig().isGuardingEnabled) return LocationOutcome.FAILED
         if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED &&
             ActivityCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_COARSE_LOCATION)
             != PackageManager.PERMISSION_GRANTED
         ) {
             Log.w(TAG, "缺少位置权限，跳过本次定位")
-            return false
+            lastLocationAttemptStatus = "失败：未授予前台定位权限"
+            return LocationOutcome.FAILED
         }
 
         try {
+            lastLocationAttemptStatus = "正在请求定位"
             // 优先 GMS，无 GMS 设备（如华为）自动降级到系统定位
             val location: Location? = DeviceLocationProvider.getCurrentLocation(this, useHighAccuracy)
 
             if (location == null) {
                 Log.w(TAG, "无法获取位置")
-                return false
+                lastLocationAttemptStatus = "失败：定位源未返回一分钟内的位置（不可用、超时或缓存过期）"
+                return LocationOutcome.FAILED
             }
-            lastLocationFixMillis = System.currentTimeMillis()
+            lastLocationFixElapsed = location.elapsedRealtimeNanos / 1_000_000L
+            health.lastFix = System.currentTimeMillis()
+            lastLocationAttemptStatus = "成功：来源=${location.provider}，精度=${location.accuracy}米"
 
             // 去重：距离上次记录不足 100 米则跳过
             lastRecordedLocation?.let { last ->
                 if (last.distanceTo(location) < DEDUP_DISTANCE_METERS) {
                     Log.d(TAG, "位置变化不足${DEDUP_DISTANCE_METERS}米，跳过记录")
-                    return false
+                    return LocationOutcome.STATIONARY
                 }
             }
 
             // 记录位置
             val config = appConfig.getConfig()
+            if (!config.isGuardingEnabled) return LocationOutcome.FAILED
             val address = AmapReverseGeocoder.resolveAddress(
                 context = this@MonitorForegroundService,
                 apiKey = config.amapWebApiKey,
@@ -315,64 +374,33 @@ class MonitorForegroundService : Service() {
                 status = EventStatus.PENDING
             )
             val dao = AppDatabase.getInstance(this@MonitorForegroundService).monitorEventDao()
+            if (!appConfig.getConfig().isGuardingEnabled) return LocationOutcome.FAILED
             dao.insert(event)
             lastRecordedLocation = location
-            Log.d(TAG, "位置已记录: ${location.latitude}, ${location.longitude}")
-            return true
+            Log.d(TAG, "位置已记录")
+            return LocationOutcome.MOVED
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "定位记录失败: ${e.message}", e)
-            return false
+            Log.e(TAG, "定位记录失败: ${e.javaClass.simpleName}")
+            lastLocationAttemptStatus = "定位或记录失败：${e.javaClass.simpleName}"
+            return LocationOutcome.FAILED
         }
     }
 
     private fun startEmailScheduler() {
         serviceScope.launch {
             try {
-                val config = appConfig.configFlow.first()
-                val intervalMinutes = config.emailIntervalMinutes.toLong()
-                Log.d(TAG, "启动邮件调度: 间隔=${intervalMinutes}分钟")
-                EmailScheduleWorker.schedule(this@MonitorForegroundService, intervalMinutes)
+                appConfig.configFlow.collect { config ->
+                    if (config.isGuardingEnabled) {
+                        EmailScheduleWorker.schedule(this@MonitorForegroundService, config.emailIntervalMinutes.toLong())
+                    } else EmailScheduleWorker.cancel(this@MonitorForegroundService)
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "启动邮件调度失败: ${e.message}", e)
+                Log.e(TAG, "启动邮件调度失败: ${e.javaClass.simpleName}")
                 // 延迟重试
                 delay(10_000L)
                 startEmailScheduler()
-            }
-        }
-    }
-
-    /**
-     * 前台服务内的邮件发送循环，作为 WorkManager 周期任务的补充。
-     * 由于前台服务不受 Doze 限制，此循环能确保在 App 运行期间
-     * 按配置的间隔检查并触发待发送位置邮件。
-     */
-    private fun startEmailCheckLoop() {
-        serviceScope.launch {
-            try {
-                val config = appConfig.configFlow.first()
-                val intervalMillis = config.emailIntervalMinutes * 60 * 1000L
-                Log.d(TAG, "启动前台邮件检查循环: 间隔=${config.emailIntervalMinutes}分钟")
-
-                // 首次等待一个完整间隔
-                delay(intervalMillis)
-
-                while (isActive) {
-                    try {
-                        val dao = AppDatabase.getInstance(this@MonitorForegroundService).monitorEventDao()
-                        val pendingCount = dao.getPendingLocationEvents().size
-                        if (pendingCount > 0) {
-                            Log.d(TAG, "前台邮件检查: 发现 $pendingCount 条待发送位置记录，触发 EmailScheduleWorker")
-                            EmailScheduleWorker.schedule(this@MonitorForegroundService, config.emailIntervalMinutes.toLong())
-                        } else {
-                            Log.d(TAG, "前台邮件检查: 无待发送记录")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "前台邮件检查失败: ${e.message}", e)
-                    }
-                    delay(intervalMillis)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "邮件检查循环启动失败: ${e.message}", e)
             }
         }
     }
@@ -387,22 +415,26 @@ class MonitorForegroundService : Service() {
                 delay(LOCATION_ALERT_CHECK_INTERVAL_MS)
                 try {
                     val config = appConfig.configFlow.first()
+                    if (!config.isGuardingEnabled) continue
                     val alertThresholdMs = maxOf(config.locationIntervalMinutes * 3, 30) * 60 * 1000L
                     val now = System.currentTimeMillis()
-                    val noFixDuration = now - lastLocationFixMillis
+                    val elapsed = SystemClock.elapsedRealtime()
+                    val noFixDuration = elapsed - lastLocationFixElapsed
                     val canSendAgain = now - lastLocationAlertMillis >= LOCATION_ALERT_REPEAT_INTERVAL_MS
-                    if (noFixDuration >= alertThresholdMs && canSendAgain) {
-                        sendLocationMissingAlert(noFixDuration, alertThresholdMs)
-                        lastLocationAlertMillis = now
+                    if (LocationPolicy.shouldAlert(
+                            elapsed, lastLocationFixElapsed, alertThresholdMs, healthyNextAttemptElapsed
+                        ) && canSendAgain
+                    ) {
+                        if (sendLocationMissingAlert(noFixDuration, alertThresholdMs)) lastLocationAlertMillis = now
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "异常未定位检查失败: ${e.message}", e)
+                    Log.e(TAG, "异常未定位检查失败: ${e.javaClass.simpleName}")
                 }
             }
         }
     }
 
-    private suspend fun sendLocationMissingAlert(noFixDurationMs: Long, thresholdMs: Long) {
+    private suspend fun sendLocationMissingAlert(noFixDurationMs: Long, thresholdMs: Long): Boolean {
         val dao = AppDatabase.getInstance(this).monitorEventDao()
         val latestLocation = dao.getLatestLocationEvent()
         val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
@@ -414,6 +446,8 @@ class MonitorForegroundService : Service() {
             appendLine("设备: $deviceModel")
             appendLine("告警时间: ${timeFormat.format(Date())}")
             appendLine("告警阈值: ${thresholdMs / 60000} 分钟")
+            appendLine("最近定位尝试: $lastLocationAttemptStatus")
+            appendLine("定位诊断: ${AppDiagnostics.locationStatus(this@MonitorForegroundService)}")
             appendLine()
             if (latestLocation == null) {
                 appendLine("最近轨迹: 暂无位置记录")
@@ -428,18 +462,14 @@ class MonitorForegroundService : Service() {
             appendLine("可能原因: 定位权限被关闭、系统限制后台定位、GPS/网络不可用、服务被系统限制。")
         }
 
-        if (MailSender(this).sendMail(subject, body)) {
-            Log.w(TAG, "异常未定位告警已发送")
-        } else {
-            Log.w(TAG, "异常未定位告警发送失败")
-        }
+        return MailWorker.enqueue(this, subject, body) != null
     }
 
     private suspend fun checkAndSendLowBatteryAlert() {
         try {
             val batteryInfo = getBatteryInfo() ?: return
             if (batteryInfo.percent >= LOW_BATTERY_RECOVERY_PERCENT) {
-                lowBatteryAlertActive = false
+                lastLowBatteryAlertMillis = 0
                 return
             }
 
@@ -447,13 +477,11 @@ class MonitorForegroundService : Service() {
 
             val now = System.currentTimeMillis()
             val canSendAgain = now - lastLowBatteryAlertMillis >= BATTERY_ALERT_REPEAT_INTERVAL_MS
-            if (!lowBatteryAlertActive || canSendAgain) {
-                sendLowBatteryAlert(batteryInfo)
-                lowBatteryAlertActive = true
+            if ((lastLowBatteryAlertMillis == 0L || canSendAgain) && sendLowBatteryAlert(batteryInfo)) {
                 lastLowBatteryAlertMillis = now
             }
         } catch (e: Exception) {
-            Log.e(TAG, "低电量检查失败: ${e.message}", e)
+            Log.e(TAG, "低电量检查失败: ${e.javaClass.simpleName}")
         }
     }
 
@@ -472,7 +500,7 @@ class MonitorForegroundService : Service() {
         )
     }
 
-    private suspend fun sendLowBatteryAlert(batteryInfo: BatteryInfo) {
+    private suspend fun sendLowBatteryAlert(batteryInfo: BatteryInfo): Boolean {
         val dao = AppDatabase.getInstance(this).monitorEventDao()
         val latestLocation = dao.getLatestLocationEvent()
         val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
@@ -497,65 +525,13 @@ class MonitorForegroundService : Service() {
             }
         }
 
-        if (MailSender(this).sendMail(subject, body)) {
-            Log.w(TAG, "低电量提醒已发送: ${batteryInfo.percent}%")
-        } else {
-            Log.w(TAG, "低电量提醒发送失败")
-        }
+        return MailWorker.enqueue(this, subject, body) != null
     }
 
     private data class BatteryInfo(
         val percent: Int,
         val isCharging: Boolean
     )
-
-    /**
-     * 每日 23:59 自动发送当天位置汇总邮件（即使没有新轨迹点也发送）
-     */
-    private fun startDailySummaryScheduler() {
-        serviceScope.launch {
-            while (isActive) {
-                val now = Calendar.getInstance()
-                val target = Calendar.getInstance().apply {
-                    set(Calendar.HOUR_OF_DAY, 23)
-                    set(Calendar.MINUTE, 59)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                    // 如果当前已过 23:59，则设定为明天
-                    if (before(now)) add(Calendar.DAY_OF_MONTH, 1)
-                }
-                val delayMs = target.timeInMillis - now.timeInMillis
-                Log.d(TAG, "每日汇总邮件将在 ${delayMs / 60000} 分钟后发送")
-                delay(delayMs)
-
-                try {
-                    sendDailySummaryEmail()
-                } catch (e: Exception) {
-                    Log.e(TAG, "每日汇总邮件发送失败: ${e.message}", e)
-                }
-            }
-        }
-    }
-
-    /**
-     * 发送当天所有位置记录的汇总邮件（不依赖 PENDING 状态）
-     */
-    private suspend fun sendDailySummaryEmail() {
-        val dao = AppDatabase.getInstance(this).monitorEventDao()
-        val startOfToday = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
-        val todayEvents = dao.getTodayLocationEvents(startOfToday)
-        val sent = EmailScheduleWorker.sendLocationReport(this, todayEvents)
-        if (sent) {
-            Log.d(TAG, "每日汇总邮件发送成功")
-        } else {
-            Log.w(TAG, "每日汇总邮件发送失败")
-        }
-    }
 
     /**
      * 初始化 WakeLock 实例（不立即 acquire）
@@ -570,11 +546,11 @@ class MonitorForegroundService : Service() {
     }
 
     /**
-     * 按需获取 WakeLock（仅在定位期间持有，最长 30 秒超时保护）
+     * 覆盖 GMS 10 秒 + 系统定位 45 秒的等待窗口，保留超时保护。
      */
     private fun acquireWakeLock() {
         if (::wakeLock.isInitialized && !wakeLock.isHeld) {
-            wakeLock.acquire(30_000L) // 最长 30 秒自动释放，防止泄漏
+            wakeLock.acquire(65_000L)
         }
     }
 

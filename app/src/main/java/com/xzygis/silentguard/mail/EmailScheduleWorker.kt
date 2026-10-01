@@ -37,7 +37,7 @@ class EmailScheduleWorker(
                 .build()
 
             val request = PeriodicWorkRequestBuilder<EmailScheduleWorker>(
-                intervalMinutes, TimeUnit.MINUTES
+                intervalMinutes.coerceAtLeast(15), TimeUnit.MINUTES
             )
                 .setConstraints(constraints)
                 .build()
@@ -56,25 +56,16 @@ class EmailScheduleWorker(
         suspend fun sendLocationReport(
             context: Context,
             events: List<MonitorEvent>,
-            periodLabel: String = "今日"
+            periodLabel: String = "待发送",
+            bindEvents: Boolean = true,
+            stableId: String? = null
         ): Boolean {
             val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             val appConfig = AppConfig(context)
             val config = appConfig.getConfig()
             val mapUrl = StaticMapUrlBuilder.buildUrl(context, events, config.amapWebApiKey)
             val addressByEventId = events.associate { event ->
-                val existingAddress = AmapReverseGeocoder.extractAddress(event.detail)
-                val resolvedAddress = if (existingAddress == null && event.latitude != null && event.longitude != null) {
-                    AmapReverseGeocoder.resolveAddress(
-                        context = context,
-                        apiKey = config.amapWebApiKey,
-                        latitude = event.latitude,
-                        longitude = event.longitude
-                    )
-                } else {
-                    existingAddress
-                }
-                event.id to resolvedAddress
+                event.id to AmapReverseGeocoder.extractAddress(event.detail)
             }
 
             val subject = "[${Build.MANUFACTURER} ${Build.MODEL}] ${events.size}条位置记录（$periodLabel）"
@@ -122,7 +113,8 @@ class EmailScheduleWorker(
                     appendLine("<p style=\"margin-top:16px;font-size:12px;color:#999;\">由 SilentGuard 自动发送</p>")
                     appendLine("</body></html>")
                 }
-                MailSender(context).sendMail(subject, htmlBody, isHtml = true)
+                MailWorker.enqueue(context, subject, htmlBody, isHtml = true,
+                    events = if (bindEvents) events else emptyList(), stableId = stableId) != null
             } else {
                 // 降级：纯文本邮件（未配置高德 Key）
                 val body = buildString {
@@ -140,7 +132,8 @@ class EmailScheduleWorker(
                         appendLine()
                     }
                 }
-                MailSender(context).sendMail(subject, body)
+                MailWorker.enqueue(context, subject, body,
+                    events = if (bindEvents) events else emptyList(), stableId = stableId) != null
             }
         }
 
@@ -155,34 +148,24 @@ class EmailScheduleWorker(
 
     override suspend fun doWork(): Result {
         return try {
+            if (!AppConfig(applicationContext).getConfig().isGuardingEnabled) return Result.success()
+            MailWorker.recover(applicationContext)
             val dao = AppDatabase.getInstance(applicationContext).monitorEventDao()
             val pendingEvents = dao.getPendingLocationEvents()
             if (pendingEvents.isEmpty()) return Result.success()
-
-            // 获取当天所有轨迹点用于邮件展示
-            val startOfToday = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, 0)
-                set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-            }.timeInMillis
-            val todayEvents = dao.getTodayLocationEvents(startOfToday)
-            val displayEvents = todayEvents.ifEmpty { pendingEvents }
-
-            val mailSent = sendLocationReport(applicationContext, displayEvents)
+            val mailSent = sendLocationReport(applicationContext, pendingEvents)
 
             if (!mailSent) {
                 Log.w(TAG, "位置邮件发送失败，保留${pendingEvents.size}条记录为待发送")
                 return Result.retry()
             }
 
-            pendingEvents.forEach { event ->
-                dao.updateStatus(event.id, EventStatus.SENT)
-            }
-            Log.d(TAG, "位置邮件发送成功，已标记${pendingEvents.size}条记录为已发送")
+            Log.d(TAG, "位置批次已持久化")
             Result.success()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "邮件调度失败: ${e.message}", e)
+            Log.e(TAG, "邮件调度失败: ${e.javaClass.simpleName}")
             Result.retry()
         }
     }

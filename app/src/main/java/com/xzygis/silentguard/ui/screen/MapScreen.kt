@@ -292,6 +292,7 @@ fun MapScreen(dao: MonitorEventDao) {
             try {
                 // 时间节流：如果最近一次位置记录在配置间隔内，跳过本次定位
                 val config = AppConfig(context).getConfig()
+                if (!config.isGuardingEnabled) return@LaunchedEffect
                 val latestLocation = dao.getLatestLocationEvent()
                 if (latestLocation != null) {
                     val timeSinceLastRecord = System.currentTimeMillis() - latestLocation.timestamp
@@ -337,7 +338,7 @@ fun MapScreen(dao: MonitorEventDao) {
                         accuracy = location.accuracy,
                         status = EventStatus.PENDING
                     )
-                    dao.insert(event)
+                    if (AppConfig(context).getConfig().isGuardingEnabled) dao.insert(event)
                 } else {
                     Log.w("MapScreen", "无法获取位置：GMS 和系统定位均未返回结果")
                 }

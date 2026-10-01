@@ -40,22 +40,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import com.google.android.gms.common.ConnectionResult
-import com.google.android.gms.common.GoogleApiAvailability
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
 import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.config.MonitorConfig
+import com.xzygis.silentguard.config.ConfigValidation
 import com.xzygis.silentguard.diagnostics.AppDiagnostics
 import com.xzygis.silentguard.location.AmapCoordinateConverter
 import com.xzygis.silentguard.location.AmapReverseGeocoder
-import com.xzygis.silentguard.mail.MailSender
+import com.xzygis.silentguard.location.DeviceLocationProvider
 import com.xzygis.silentguard.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CancellationException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -63,11 +58,14 @@ import java.util.Locale
 @Composable
 fun SettingsScreen(
     appConfig: AppConfig,
-    mailSender: MailSender,
     isGuarding: Boolean = false,
     onToggleGuarding: (Boolean) -> Unit = {}
 ) {
-    val config by appConfig.configFlow.collectAsState(initial = MonitorConfig())
+    val loadedConfig by appConfig.configFlow.collectAsState(initial = null)
+    val config = loadedConfig ?: run {
+        Text("正在加载配置…")
+        return
+    }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val appVersionName = remember(context) {
@@ -85,42 +83,25 @@ fun SettingsScreen(
     var emailInterval by remember(config.emailIntervalMinutes) { mutableStateOf(config.emailIntervalMinutes.toString()) }
     var useHighAccuracy by remember(config.useHighAccuracy) { mutableStateOf(config.useHighAccuracy) }
     var amapWebApiKey by remember(config.amapWebApiKey) { mutableStateOf(config.amapWebApiKey) }
+    var retentionDays by remember(config.retentionDays) { mutableStateOf(config.retentionDays.toString()) }
+    var saveStatus by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
     val smsReady = AppDiagnostics.hasSmsPermission(context) || AppDiagnostics.hasNotificationReadAccess(context)
     val locationReady = AppDiagnostics.hasLocationPermission(context)
     val batteryReady = AppDiagnostics.isIgnoringBatteryOptimizations(context)
 
-    // 标记 config 是否已从 DataStore 加载完成（非默认空值）
-    val configLoaded = config.smtpHost.isNotEmpty() ||
-            config.senderEmail.isNotEmpty() ||
-            config.recipientEmail.isNotEmpty() ||
-            config.amapWebApiKey.isNotEmpty() ||
-            config.smtpPort != 465 ||
-            config.isGuardingEnabled
-
-    // 自动保存：任意字段变化后 800ms 自动持久化
-    // 使用各字段值作为 key，仅在用户实际编辑后触发
-    LaunchedEffect(
-        smtpHost, smtpPort, senderEmail, senderPassword, recipientEmail,
-        locationInterval, emailInterval, useHighAccuracy, amapWebApiKey
-    ) {
-        // config 未加载完毕时不保存，避免用空值覆盖
-        if (!configLoaded && smtpHost.isBlank() && senderEmail.isBlank()) return@LaunchedEffect
-
-        delay(800)
-        val newConfig = MonitorConfig(
+    fun draftConfig() = config.copy(
             smtpHost = smtpHost.trim(),
-            smtpPort = smtpPort.trim().toIntOrNull() ?: 465,
+            smtpPort = smtpPort.trim().toIntOrNull() ?: 0,
             senderEmail = senderEmail.trim(),
             senderPassword = senderPassword.trim(),
             recipientEmail = recipientEmail.trim(),
-            locationIntervalMinutes = locationInterval.trim().toIntOrNull() ?: 5,
-            emailIntervalMinutes = emailInterval.trim().toIntOrNull() ?: 60,
-            isGuardingEnabled = config.isGuardingEnabled,
+            locationIntervalMinutes = locationInterval.trim().toIntOrNull() ?: 0,
+            emailIntervalMinutes = emailInterval.trim().toIntOrNull() ?: 0,
             useHighAccuracy = useHighAccuracy,
-            amapWebApiKey = amapWebApiKey.trim()
+            amapWebApiKey = amapWebApiKey.trim(),
+            retentionDays = retentionDays.toIntOrNull() ?: 0
         )
-        appConfig.saveConfig(newConfig)
-    }
 
     Column(
         modifier = Modifier
@@ -131,6 +112,21 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Spacer(modifier = Modifier.height(4.dp))
+        OutlinedButton(enabled = !saving, onClick = {
+            val draft = draftConfig()
+            val errors = ConfigValidation.errors(draft)
+            if (errors.isNotEmpty()) saveStatus = errors.joinToString("；")
+            else scope.launch {
+                saving = true
+                saveStatus = try {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { appConfig.saveConfig(draft) }
+                    "配置已保存"
+                } catch (e: IllegalArgumentException) { e.message ?: "配置无效" }
+                catch (e: Exception) { "保存失败，请重试" }
+                finally { saving = false }
+            }
+        }, modifier = Modifier.fillMaxWidth()) { Text(if (saving) "正在保存…" else "保存设置") }
+        if (saveStatus.isNotBlank()) Text(saveStatus, style = MaterialTheme.typography.bodySmall)
 
         SetupSummaryCard(
             isGuarding = isGuarding,
@@ -142,6 +138,8 @@ fun SettingsScreen(
 
         // 守护开关
         SettingsSection(title = "守护服务") {
+            Text("关闭后暂停自动采集与待发送任务，重新开启后恢复。已开始发送的邮件无法撤回；手动 SOS 和测试邮件仍可发送。",
+                style = MaterialTheme.typography.bodySmall)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -208,6 +206,8 @@ fun SettingsScreen(
 
         // 记录配置
         SettingsSection(title = "记录参数") {
+            SettingsTextField(value = retentionDays, onValueChange = { retentionDays = it },
+                label = "已发送数据保留天数（7–3650）", keyboardType = KeyboardType.Number)
             SettingsTextField(
                 value = locationInterval,
                 onValueChange = { locationInterval = it },
@@ -278,6 +278,15 @@ fun SettingsScreen(
                 description = if (locationReady) "定位权限已开启" else "需要定位权限才能记录位置"
             )
             DiagnosticItem(
+                label = "后台定位",
+                isReady = AppDiagnostics.hasBackgroundLocationPermission(context),
+                description = if (AppDiagnostics.hasBackgroundLocationPermission(context)) {
+                    "后台定位权限已开启"
+                } else {
+                    "请在应用权限设置中将位置设为「始终允许」，以支持后台恢复定位"
+                }
+            )
+            DiagnosticItem(
                 label = "后台运行",
                 isReady = batteryReady,
                 description = if (batteryReady) "系统已允许忽略电池优化" else "建议关闭电池优化并允许自启动"
@@ -312,28 +321,31 @@ fun SettingsScreen(
 
         SettingsSection(title = "隐私与透明度") {
             Text(
-                text = "SilentGuard 只在本机记录短信摘要和位置，并发送到您自己配置的邮箱；应用不会连接自有服务器，也不会把数据发送给第三方。",
+                text = "短信正文、位置和邮件任务保存在本机，并经您配置的 SMTP 服务发送给收件人。应用没有自有服务器；邮件服务商会处理邮件内容。未发送数据不会自动清理。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "高德 Web API Key 仅用于地址解析和邮件地图图片；SMTP 授权码和高德 Key 已使用系统加密存储。",
+                text = "同意高德服务后，地图 SDK 和地址解析会向高德传输坐标及必要设备信息；邮件地图图片也会向高德请求。SMTP 授权码和高德 Key 已加密保存。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        DataPrivacyControls()
 
         // 测试邮件
         OutlinedButton(
             onClick = {
                 scope.launch {
                     Toast.makeText(context, "正在发送测试邮件…", Toast.LENGTH_SHORT).show()
-                    val success = mailSender.sendMail(
+                    val success = runCatching { com.xzygis.silentguard.mail.MailWorker.enqueue(
+                        context = context,
                         subject = "[测试] SilentGuard 测试邮件",
-                        body = buildTestMailBody(context, useHighAccuracy, amapWebApiKey.trim())
-                    )
+                        body = buildTestMailBody(context, config.useHighAccuracy, config.amapWebApiKey),
+                        automatic = false
+                    ) != null }.getOrDefault(false)
                     if (success) {
-                        Toast.makeText(context, "测试邮件发送成功", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "测试邮件已加入发件箱，请在记录页查看投递结果", Toast.LENGTH_LONG).show()
                     } else {
                         Toast.makeText(context, "发送失败，请检查配置", Toast.LENGTH_LONG).show()
                     }
@@ -343,7 +355,7 @@ fun SettingsScreen(
             shape = RoundedCornerShape(14.dp)
         ) {
             Text(
-                text = "发送测试邮件",
+                text = "发送测试邮件（使用已保存设置）",
                 modifier = Modifier.padding(vertical = 4.dp),
                 style = MaterialTheme.typography.labelLarge
             )
@@ -398,33 +410,12 @@ private suspend fun buildTestMailBody(
         return body.appendLine("当前坐标: 未授予定位权限").toString()
     }
 
-    val gmsAvailable = try {
-        GoogleApiAvailability.getInstance()
-            .isGooglePlayServicesAvailable(context) == ConnectionResult.SUCCESS
-    } catch (e: Exception) {
-        false
-    }
-
-    if (!gmsAvailable) {
-        return body.appendLine("当前坐标: Google Play Services 不可用，无法获取定位").toString()
-    }
-
     return try {
-        val fusedClient = LocationServices.getFusedLocationProviderClient(context)
-        val priority = if (useHighAccuracy) {
-            Priority.PRIORITY_HIGH_ACCURACY
-        } else {
-            Priority.PRIORITY_BALANCED_POWER_ACCURACY
-        }
-        var location = withTimeoutOrNull(10_000L) {
-            fusedClient.getCurrentLocation(priority, CancellationTokenSource().token).await()
-        }
-        if (location == null) {
-            location = fusedClient.lastLocation.await()
-        }
+        val location = DeviceLocationProvider.getCurrentLocation(context, useHighAccuracy)
 
         if (location == null) {
-            body.appendLine("当前坐标: 暂未获取到定位结果").toString()
+            body.appendLine("当前坐标: 暂未获取到定位结果")
+                .appendLine("定位诊断: ${AppDiagnostics.locationStatus(context)}").toString()
         } else {
             val address = AmapReverseGeocoder.resolveAddress(
                 context = context,
@@ -452,6 +443,8 @@ private suspend fun buildTestMailBody(
                 .appendLine("高德地图: $amapLink")
                 .toString()
         }
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
         body.appendLine("当前坐标: 获取失败（${e.message ?: "未知错误"}）").toString()
     }

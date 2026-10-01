@@ -28,12 +28,9 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 val config = appConfig.configFlow.first()
                 if (config.isGuardingEnabled) {
-                    val serviceIntent = Intent(context, MonitorForegroundService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(serviceIntent)
-                    } else {
-                        context.startService(serviceIntent)
-                    }
+                    com.xzygis.silentguard.diagnostics.GuardHealth.start(context)
+                    com.xzygis.silentguard.mail.MailWorker.recover(context)
+                    com.xzygis.silentguard.mail.EmailScheduleWorker.schedule(context, config.emailIntervalMinutes.toLong())
                     Log.i(TAG, "开机自启动守护服务")
                 }
             } catch (e: Exception) {

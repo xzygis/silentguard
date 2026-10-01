@@ -5,10 +5,14 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
+import com.google.android.gms.common.GoogleApiAvailability
 import com.xzygis.silentguard.config.MonitorConfig
 import com.xzygis.silentguard.data.MailSendRecord
 import com.xzygis.silentguard.data.MonitorEvent
@@ -34,6 +38,51 @@ object AppDiagnostics {
             context,
             Manifest.permission.ACCESS_COARSE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun hasBackgroundLocationPermission(context: Context): Boolean =
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            hasLocationPermission(context)
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        }
+
+    /** 只报告可观测事实；有前台权限并不代表后台恢复服务时也能访问位置。 */
+    fun locationStatus(context: Context): String {
+        fun state(block: () -> Boolean): String = try {
+            if (block()) "是" else "否"
+        } catch (e: Exception) {
+            "未知"
+        }
+        val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        val power = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val version = try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        } catch (e: Exception) {
+            "未知"
+        }
+        val gms = try {
+            GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context).toString()
+        } catch (e: Exception) {
+            "未知"
+        }
+        return listOf(
+            "版本=$version / Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+            "前台定位权限=${state { hasLocationPermission(context) }}",
+            "精确定位权限=${state {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                    PackageManager.PERMISSION_GRANTED
+            }}",
+            "后台定位权限=${state { hasBackgroundLocationPermission(context) }}",
+            "系统定位开启=${state { manager != null && LocationManagerCompat.isLocationEnabled(manager) }}",
+            "GPS开启=${state { manager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true }}",
+            "网络定位开启=${state { manager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true }}",
+            "GMS状态码=$gms（0为可用）",
+            "忽略电池优化=${state { isIgnoringBatteryOptimizations(context) }}",
+            "省电模式=${state { power?.isPowerSaveMode == true }}",
+            "Doze=${state { power?.isDeviceIdleMode == true }}"
+        ).joinToString("；")
     }
 
     fun hasNotificationReadAccess(context: Context): Boolean {
@@ -104,6 +153,7 @@ object AppDiagnostics {
             appendLine("- 短信权限: ${if (hasSmsPermission(context)) "已开启" else "未开启"}")
             appendLine("- 通知读取: ${if (hasNotificationReadAccess(context)) "已开启" else "未开启"}")
             appendLine("- 定位权限: ${if (hasLocationPermission(context)) "已开启" else "未开启"}")
+            appendLine("- 定位详情: ${locationStatus(context)}")
             appendLine("- 电池优化: ${if (isIgnoringBatteryOptimizations(context)) "已忽略优化" else "可能受系统限制"}")
             appendLine()
             appendLine("配置状态:")

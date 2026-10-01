@@ -9,6 +9,8 @@ import com.xzygis.silentguard.data.AppDatabase
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
 import com.xzygis.silentguard.data.MonitorEvent
+import com.xzygis.silentguard.data.SmsIdentity
+import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.mail.MailWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +35,7 @@ class SmsReceiver : BroadcastReceiver() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                if (!AppConfig(context).getConfig().isGuardingEnabled) return@launch
                 val senderMap = mutableMapOf<String, StringBuilder>()
 
                 for (sms in messages) {
@@ -43,7 +46,6 @@ class SmsReceiver : BroadcastReceiver() {
 
                 val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
                 val currentTime = timeFormat.format(Date())
-                val dao = AppDatabase.getInstance(context).monitorEventDao()
 
                 for ((sender, content) in senderMap) {
                     val subject = "[短信] 来自: $sender"
@@ -60,18 +62,18 @@ class SmsReceiver : BroadcastReceiver() {
                         title = "来自 $sender",
                         summary = content.toString().take(100),
                         detail = body,
-                        status = EventStatus.PENDING
+                        status = EventStatus.PENDING,
+                        sourceKey = SmsIdentity.key("sms", sender, content.toString(),
+                            messages.first { (it.displayOriginatingAddress ?: "未知号码") == sender }.timestampMillis)
                     )
                     try {
-                        val eventId = dao.insert(event)
-                        MailWorker.enqueue(context, subject, body)
-                        dao.updateStatus(eventId, EventStatus.SENT)
+                        MailWorker.enqueue(context, subject, body, newEvent = event)
                     } catch (e: Exception) {
-                        Log.e(TAG, "记录短信事件失败: ${e.message}", e)
+                        Log.e(TAG, "记录短信事件失败: ${e.javaClass.simpleName}")
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "处理短信失败: ${e.message}", e)
+                Log.e(TAG, "处理短信失败: ${e.javaClass.simpleName}")
             } finally {
                 pendingResult.finish()
             }

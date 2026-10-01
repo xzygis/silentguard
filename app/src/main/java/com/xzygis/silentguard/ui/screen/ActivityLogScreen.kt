@@ -33,6 +33,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.TextButton
+import kotlinx.coroutines.launch
+import com.xzygis.silentguard.data.AppDatabase
+import com.xzygis.silentguard.mail.MailWorker
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,16 +71,22 @@ fun ActivityLogScreen(
     var selectedFilter by remember { mutableStateOf(FilterType.ALL) }
     var expandedEventId by remember { mutableStateOf<Long?>(null) }
     var expandedMailRecordId by remember { mutableStateOf<Long?>(null) }
-
-    val events by when (selectedFilter) {
-        FilterType.ALL -> dao.getAllEvents()
-        FilterType.SMS -> dao.getEventsByType(EventType.SMS)
-        FilterType.LOCATION -> dao.getEventsByType(EventType.LOCATION)
-        FilterType.MAIL -> dao.getAllEvents()
-    }.collectAsState(initial = emptyList())
+    var page by remember(selectedFilter) { mutableStateOf(0) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val eventFlow = remember(selectedFilter, page) {
+        dao.observePage(100, page * 100, when (selectedFilter) {
+            FilterType.SMS -> EventType.SMS
+            FilterType.LOCATION -> EventType.LOCATION
+            else -> null
+        })
+    }
+    val events by eventFlow.collectAsState(initial = emptyList())
+    val outboxFlow = remember(page) { AppDatabase.getInstance(context).outboxDao().observe(100, page * 100) }
+    val outbox by outboxFlow.collectAsState(initial = emptyList())
     val mailRecords by mailRecordDao.getAllRecords().collectAsState(initial = emptyList())
     val isMailTab = selectedFilter == FilterType.MAIL
-    val isEmpty = if (isMailTab) mailRecords.isEmpty() else events.isEmpty()
+    val isEmpty = if (isMailTab) outbox.isEmpty() && mailRecords.isEmpty() else events.isEmpty()
 
     Column(
         modifier = Modifier
@@ -108,6 +120,11 @@ fun ActivityLogScreen(
             }
         }
 
+        Row {
+            TextButton(enabled = page > 0, onClick = { page-- }) { Text("上一页") }
+            TextButton(enabled = (if (isMailTab) outbox.size else events.size) == 100, onClick = { page++ }) { Text("下一页") }
+            Text("第 ${page + 1} 页", modifier = Modifier.padding(12.dp))
+        }
         if (isEmpty) {
             // 空状态
             Box(
@@ -141,6 +158,19 @@ fun ActivityLogScreen(
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 if (isMailTab) {
+                    items(outbox, key = { "outbox-${it.id}" }) { task ->
+                        Surface(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(14.dp)) {
+                                Text(task.subject, style = MaterialTheme.typography.titleSmall)
+                                Text("${task.recipient} · ${task.state} · 尝试 ${task.attempts} 次")
+                                if (task.error.isNotBlank()) Text(task.error)
+                                if (task.state == "FAILED") TextButton(onClick = {
+                                    scope.launch { MailWorker.retry(context, task.id) }
+                                }) { Text("重试此邮件") }
+                            }
+                        }
+                    }
+                    item { Text("最近投递尝试（含旧版记录）", modifier = Modifier.padding(12.dp)) }
                     val groupedRecords = mailRecords.groupBy { dateLabel(it.timestamp) }
 
                     groupedRecords.forEach { (dateLabel, records) ->
