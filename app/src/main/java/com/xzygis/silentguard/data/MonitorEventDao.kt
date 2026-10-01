@@ -2,6 +2,7 @@ package com.xzygis.silentguard.data
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
@@ -9,7 +10,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface MonitorEventDao {
 
-    @Insert
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(event: MonitorEvent): Long
 
     @Update
@@ -51,8 +52,29 @@ interface MonitorEventDao {
     @Query("SELECT * FROM monitor_events WHERE id = :id")
     suspend fun getEventById(id: Long): MonitorEvent?
 
-    @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND status = 'PENDING' ORDER BY timestamp ASC")
+    @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND status = 'PENDING' AND outboxId IS NULL ORDER BY timestamp ASC, id ASC LIMIT 100")
     suspend fun getPendingLocationEvents(): List<MonitorEvent>
+
+    @Query("UPDATE monitor_events SET outboxId=:outboxId WHERE id IN (:ids) AND outboxId IS NULL AND status='PENDING'")
+    suspend fun bindOutbox(ids: List<Long>, outboxId: String): Int
+
+    @Query("UPDATE monitor_events SET status='SENT' WHERE outboxId=:outboxId")
+    suspend fun markDelivered(outboxId: String)
+
+    @Query("SELECT * FROM monitor_events WHERE (:type IS NULL OR type=:type) ORDER BY timestamp DESC, id DESC LIMIT :limit OFFSET :offset")
+    fun observePage(limit: Int, offset: Int = 0, type: EventType? = null): Flow<List<MonitorEvent>>
+
+    @Query("SELECT * FROM monitor_events WHERE id>:afterId AND id<=:throughId ORDER BY id LIMIT :limit")
+    suspend fun exportPage(afterId: Long, limit: Int = 200, throughId: Long = Long.MAX_VALUE): List<MonitorEvent>
+
+    @Query("SELECT COALESCE(MAX(id),0) FROM monitor_events")
+    suspend fun maxId(): Long
+
+    @Query("SELECT * FROM monitor_events WHERE type='LOCATION' AND timestamp>=:start AND timestamp<:end AND id>:afterId ORDER BY id LIMIT 100")
+    suspend fun locationDayPage(start: Long, end: Long, afterId: Long): List<MonitorEvent>
+
+    @Query("DELETE FROM monitor_events WHERE status='SENT' AND timestamp<:before")
+    suspend fun deleteDeliveredBefore(before: Long)
 
     @Query("SELECT * FROM monitor_events WHERE type = 'LOCATION' AND latitude IS NOT NULL AND timestamp >= :startOfDay ORDER BY timestamp ASC")
     suspend fun getTodayLocationEvents(startOfDay: Long): List<MonitorEvent>

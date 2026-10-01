@@ -22,7 +22,7 @@ object StaticMapUrlBuilder {
      * @return 静态地图图片 URL，事件不足时返回 null
      */
     fun buildUrl(context: Context, events: List<MonitorEvent>, apiKey: String): String? {
-        if (apiKey.isBlank()) return null
+        if (apiKey.isBlank() || !com.xzygis.silentguard.config.MapPrivacy.isAllowed(context)) return null
 
         val points = events.mapNotNull { event ->
             val latitude = event.latitude ?: return@mapNotNull null
@@ -32,7 +32,7 @@ object StaticMapUrlBuilder {
         if (points.isEmpty()) return null
 
         val sb = StringBuilder(BASE_URL)
-        sb.append("?key=$apiKey")
+        sb.append("?key=${java.net.URLEncoder.encode(apiKey, "UTF-8")}")
         sb.append("&size=$MAX_SIZE")
         sb.append("&scale=$SCALE")
 

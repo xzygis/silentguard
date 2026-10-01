@@ -28,7 +28,8 @@ data class MonitorConfig(
     val emailIntervalMinutes: Int = 60,
     val isGuardingEnabled: Boolean = false,
     val useHighAccuracy: Boolean = false,
-    val amapWebApiKey: String = ""
+    val amapWebApiKey: String = "",
+    val retentionDays: Int = 90
 )
 
 class AppConfig(private val context: Context) {
@@ -42,6 +43,7 @@ class AppConfig(private val context: Context) {
         val EMAIL_INTERVAL = intPreferencesKey("email_interval_minutes")
         val IS_GUARDING_ENABLED = booleanPreferencesKey("is_monitoring_enabled")
         val USE_HIGH_ACCURACY = booleanPreferencesKey("use_high_accuracy")
+        val RETENTION_DAYS = intPreferencesKey("retention_days")
     }
 
     private val encryptedPrefs: SharedPreferences by lazy {
@@ -82,11 +84,12 @@ class AppConfig(private val context: Context) {
             senderEmail = chooseConfigValue(prefs[Keys.SENDER_EMAIL], defaults.senderEmail),
             senderPassword = chooseConfigValue(savedSenderPassword, defaults.senderPassword),
             recipientEmail = chooseConfigValue(prefs[Keys.RECIPIENT_EMAIL], defaults.recipientEmail),
-            locationIntervalMinutes = prefs[Keys.LOCATION_INTERVAL] ?: 5,
-            emailIntervalMinutes = prefs[Keys.EMAIL_INTERVAL] ?: 60,
+            locationIntervalMinutes = (prefs[Keys.LOCATION_INTERVAL] ?: 5).coerceIn(1, 60),
+            emailIntervalMinutes = (prefs[Keys.EMAIL_INTERVAL] ?: 60).coerceIn(15, 1440),
             isGuardingEnabled = prefs[Keys.IS_GUARDING_ENABLED] ?: false,
             useHighAccuracy = prefs[Keys.USE_HIGH_ACCURACY] ?: false,
-            amapWebApiKey = chooseConfigValue(savedAmapWebApiKey, defaults.amapWebApiKey)
+            amapWebApiKey = chooseConfigValue(savedAmapWebApiKey, defaults.amapWebApiKey),
+            retentionDays = (prefs[Keys.RETENTION_DAYS] ?: 90).coerceIn(7, 3650)
         )
     }
 
@@ -95,11 +98,16 @@ class AppConfig(private val context: Context) {
     }
 
     suspend fun saveConfig(config: MonitorConfig) {
+        require(ConfigValidation.errors(config).isEmpty()) { ConfigValidation.errors(config).joinToString("；") }
+        require(!getConfig().isGuardingEnabled ||
+            (config.senderEmail.isNotBlank() && config.senderPassword.isNotBlank() && config.recipientEmail.isNotBlank())) {
+            "清空邮件配置前请先停止守护"
+        }
         // 敏感数据加密存储
         encryptedPrefs.edit()
             .putString("sender_password", config.senderPassword)
             .putString("amap_web_api_key", config.amapWebApiKey)
-            .apply()
+            .commit().also { check(it) { "加密配置保存失败" } }
 
         // 其他配置存 DataStore
         context.dataStore.edit { prefs ->
@@ -109,8 +117,8 @@ class AppConfig(private val context: Context) {
             prefs[Keys.RECIPIENT_EMAIL] = config.recipientEmail
             prefs[Keys.LOCATION_INTERVAL] = config.locationIntervalMinutes
             prefs[Keys.EMAIL_INTERVAL] = config.emailIntervalMinutes
-            prefs[Keys.IS_GUARDING_ENABLED] = config.isGuardingEnabled
             prefs[Keys.USE_HIGH_ACCURACY] = config.useHighAccuracy
+            prefs[Keys.RETENTION_DAYS] = config.retentionDays
         }
     }
 

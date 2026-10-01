@@ -59,6 +59,15 @@ fun buildConfigString(value: String): String {
 android {
     namespace = "com.xzygis.silentguard"
     compileSdk = 34
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            val testHome = layout.buildDirectory.dir("test-home").get().asFile
+            it.systemProperty("user.home", testHome.absolutePath)
+            it.systemProperty("robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2")
+            it.doFirst { testHome.mkdirs() }
+        }
+    }
 
     signingConfigs {
         create("release") {
@@ -113,7 +122,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            if (System.getenv("KEYSTORE_FILE") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -151,6 +162,10 @@ android {
             (this as BaseVariantOutputImpl).outputFileName = "silentguard-$apkVersionName.apk"
         }
     }
+}
+
+kapt {
+    arguments { arg("room.schemaLocation", "$projectDir/schemas") }
 }
 
 dependencies {
@@ -210,4 +225,8 @@ dependencies {
     implementation("com.amap.api:3dmap:10.0.600")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.12.2")
+    testImplementation("androidx.test:core:1.5.0")
+    testImplementation("androidx.room:room-testing:2.6.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }

@@ -8,6 +8,7 @@ import com.xzygis.silentguard.data.AppDatabase
 import com.xzygis.silentguard.data.MailSendRecord
 import com.xzygis.silentguard.data.MailSendStatus
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import jakarta.mail.Authenticator
@@ -30,16 +31,22 @@ class MailSender(private val context: Context) {
         subject: String,
         body: String,
         isHtml: Boolean = false,
-        retryCount: Int = 0
+        retryCount: Int = 0,
+        recipientOverride: String? = null,
+        messageId: String? = null,
+        recordResult: Boolean = true
     ): Boolean {
         return withContext(Dispatchers.IO) {
+            val finalSubject = MailSubject.withDevicePrefix(subject)
             try {
-                val config = appConfig.configFlow.first()
+                val config = appConfig.configFlow.first().let {
+                    if (recipientOverride == null) it else it.copy(recipientEmail = recipientOverride)
+                }
 
                 if (config.senderEmail.isBlank() || config.senderPassword.isBlank() || config.recipientEmail.isBlank()) {
                     Log.w(TAG, "邮件配置不完整，跳过发送")
-                    recordMailResult(
-                        subject = subject,
+                    if (recordResult) recordMailResult(
+                        subject = finalSubject,
                         recipient = config.recipientEmail,
                         status = MailSendStatus.FAILED,
                         errorMessage = "邮件配置不完整",
@@ -55,12 +62,18 @@ class MailSender(private val context: Context) {
                         return PasswordAuthentication(config.senderEmail, config.senderPassword)
                     }
                 })
-                session.debug = BuildConfig.DEBUG
+                session.debug = false
 
-                val message = MimeMessage(session).apply {
+                val message = object : MimeMessage(session) {
+                    override fun updateMessageID() {
+                        if (messageId == null) super.updateMessageID()
+                        else setHeader("Message-ID",
+                            "<${java.util.UUID.nameUUIDFromBytes(messageId.toByteArray(Charsets.UTF_8))}@silentguard.local>")
+                    }
+                }.apply {
                     setFrom(InternetAddress(config.senderEmail))
                     setRecipient(Message.RecipientType.TO, InternetAddress(config.recipientEmail))
-                    setSubject(subject)
+                    setSubject(finalSubject)
                     if (isHtml) {
                         setContent(body, "text/html; charset=UTF-8")
                     } else {
@@ -69,21 +82,23 @@ class MailSender(private val context: Context) {
                 }
 
                 Transport.send(message)
-                Log.i(TAG, "邮件发送成功: $subject")
-                recordMailResult(
-                    subject = subject,
+                Log.i(TAG, "SMTP accepted message")
+                if (recordResult) recordMailResult(
+                    subject = finalSubject,
                     recipient = config.recipientEmail,
                     status = MailSendStatus.SENT,
                     retryCount = retryCount
                 )
                 return@withContext true
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.e(TAG, "邮件发送失败: ${e.message}", e)
-                recordMailResult(
-                    subject = subject,
+                Log.e(TAG, "SMTP failed: ${e.javaClass.simpleName}")
+                if (recordResult) recordMailResult(
+                    subject = finalSubject,
                     recipient = runCatching { appConfig.configFlow.first().recipientEmail }.getOrDefault(""),
                     status = if (retryCount > 0) MailSendStatus.RETRYING else MailSendStatus.FAILED,
-                    errorMessage = e.message.orEmpty(),
+                    errorMessage = e.javaClass.simpleName,
                     retryCount = retryCount
                 )
                 return@withContext false
@@ -109,7 +124,7 @@ class MailSender(private val context: Context) {
                 )
             )
         }.onFailure { e ->
-            Log.w(TAG, "邮件发送记录写入失败: ${e.message}")
+            Log.w(TAG, "邮件发送记录写入失败: ${e.javaClass.simpleName}")
         }
     }
 }

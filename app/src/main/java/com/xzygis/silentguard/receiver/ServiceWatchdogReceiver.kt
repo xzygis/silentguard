@@ -8,7 +8,10 @@ import android.os.Build
 import android.util.Log
 import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.service.MonitorForegroundService
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import com.xzygis.silentguard.diagnostics.GuardHealth
 
 /**
  * AlarmManager 兜底唤醒接收器。
@@ -22,23 +25,17 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
         val appConfig = AppConfig(context)
-        val isGuardingEnabled = runBlocking { appConfig.getConfig().isGuardingEnabled }
-
-        if (!isGuardingEnabled) {
-            Log.d(TAG, "守护未开启，跳过服务检查")
-            return
-        }
-
-        if (!isServiceRunning(context)) {
-            Log.w(TAG, "检测到守护服务未运行，正在重启...")
-            val serviceIntent = Intent(context, MonitorForegroundService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent)
-            } else {
-                context.startService(serviceIntent)
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                if (appConfig.getConfig().isGuardingEnabled && !GuardHealth(context).isAlive()) {
+                    GuardHealth.start(context)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "服务恢复失败: ${e.javaClass.simpleName}")
+            } finally {
+                pending.finish()
             }
-        } else {
-            Log.d(TAG, "守护服务正常运行中")
         }
     }
 

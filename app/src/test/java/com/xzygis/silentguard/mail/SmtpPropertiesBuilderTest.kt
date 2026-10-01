@@ -7,6 +7,17 @@ import org.junit.Test
 class SmtpPropertiesBuilderTest {
 
     @Test
+    fun `all transports bound network waits and verify the server identity`() {
+        listOf(465, 587, 2525).forEach { port ->
+            val properties = SmtpPropertiesBuilder.build("smtp.example.com", port)
+            assertEquals("15000", properties.getProperty("mail.smtp.connectiontimeout"))
+            assertEquals("30000", properties.getProperty("mail.smtp.timeout"))
+            assertEquals("30000", properties.getProperty("mail.smtp.writetimeout"))
+            assertEquals("true", properties.getProperty("mail.smtp.ssl.checkserveridentity"))
+        }
+    }
+
+    @Test
     fun `port 587 uses starttls`() {
         val properties = SmtpPropertiesBuilder.build("smtp.office365.com", 587)
 

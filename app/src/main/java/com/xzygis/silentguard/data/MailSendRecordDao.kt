@@ -11,14 +11,17 @@ interface MailSendRecordDao {
     @Insert
     suspend fun insert(record: MailSendRecord): Long
 
-    @Query("SELECT * FROM mail_send_records ORDER BY timestamp DESC")
-    fun getAllRecords(): Flow<List<MailSendRecord>>
+    @Query("SELECT * FROM mail_send_records ORDER BY timestamp DESC, id DESC LIMIT :limit")
+    fun getAllRecords(limit: Int = 100): Flow<List<MailSendRecord>>
 
     @Query("SELECT * FROM mail_send_records ORDER BY timestamp DESC LIMIT 1")
     fun getLatestRecord(): Flow<MailSendRecord?>
 
-    @Query("SELECT COUNT(*) FROM mail_send_records WHERE status IN ('FAILED', 'RETRYING')")
+    @Query("SELECT (SELECT COUNT(*) FROM outbox WHERE state IN ('FAILED','RETRYING')) + (SELECT COUNT(*) FROM (SELECT status FROM mail_send_records ORDER BY timestamp DESC,id DESC LIMIT 1) WHERE status='FAILED')")
     fun getUnhealthyCount(): Flow<Int>
+
+    @Query("DELETE FROM mail_send_records WHERE timestamp<:before")
+    suspend fun deleteBefore(before: Long)
 
     @Query("DELETE FROM mail_send_records")
     suspend fun clearAll()

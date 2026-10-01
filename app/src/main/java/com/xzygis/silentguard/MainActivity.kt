@@ -39,7 +39,6 @@ import androidx.navigation.compose.rememberNavController
 import com.xzygis.silentguard.config.AppConfig
 import com.xzygis.silentguard.config.MonitorConfig
 import com.xzygis.silentguard.data.AppDatabase
-import com.xzygis.silentguard.mail.MailSender
 import com.xzygis.silentguard.service.MonitorForegroundService
 import com.xzygis.silentguard.util.BackgroundGuideHelper
 import com.xzygis.silentguard.service.SmsNotificationListenerService
@@ -50,11 +49,15 @@ import com.xzygis.silentguard.ui.screen.MapScreen
 import com.xzygis.silentguard.ui.screen.SettingsScreen
 import com.xzygis.silentguard.ui.theme.SilentGuardTheme
 import kotlinx.coroutines.launch
+import androidx.lifecycle.lifecycleScope
+import com.xzygis.silentguard.diagnostics.AppDiagnostics
+import com.xzygis.silentguard.diagnostics.GuardHealth
+import com.xzygis.silentguard.mail.EmailScheduleWorker
+import com.xzygis.silentguard.mail.MailWorker
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var appConfig: AppConfig
-    private lateinit var mailSender: MailSender
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -71,20 +74,23 @@ class MainActivity : ComponentActivity() {
                 Toast.makeText(this, "部分权限被拒绝，功能可能受限", Toast.LENGTH_LONG).show()
             }
         }
+        restoreGuardingIfNeeded()
+        if (AppDiagnostics.hasLocationPermission(this) && !AppDiagnostics.hasBackgroundLocationPermission(this)) {
+            AlertDialog.Builder(this).setTitle("后台定位需要单独授权")
+                .setMessage("前台定位已授权。若希望锁屏后持续守护和后台恢复，请在位置权限中选择「始终允许」。")
+                .setPositiveButton("去设置") { _, _ -> startActivity(AppDiagnostics.appDetailsIntent(this)) }
+                .setNegativeButton("稍后", null).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 高德地图隐私合规（必须在 SDK 调用之前）
-        com.amap.api.maps.MapsInitializer.updatePrivacyShow(this, true, true)
-        com.amap.api.maps.MapsInitializer.updatePrivacyAgree(this, true)
-
         appConfig = AppConfig(this)
-        mailSender = MailSender(this)
 
-        requestPermissions()
         restoreGuardingIfNeeded()
+        com.xzygis.silentguard.data.RetentionWorker.schedule(this)
+        lifecycleScope.launch { MailWorker.recover(this@MainActivity) }
 
         setContent {
             SilentGuardTheme {
@@ -205,7 +211,6 @@ class MainActivity : ComponentActivity() {
                 composable(Screen.Settings.route) {
                     SettingsScreen(
                         appConfig = appConfig,
-                        mailSender = mailSender,
                         isGuarding = config.isGuardingEnabled,
                         onToggleGuarding = { toggleGuarding(it) }
                     )
@@ -218,40 +223,47 @@ class MainActivity : ComponentActivity() {
      * App 启动时检查守护状态，如果之前已开启则自动恢复服务
      */
     private fun restoreGuardingIfNeeded() {
-        kotlinx.coroutines.MainScope().launch {
+        lifecycleScope.launch {
             val config = appConfig.getConfig()
             if (config.isGuardingEnabled) {
-                val serviceIntent = Intent(this@MainActivity, MonitorForegroundService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(serviceIntent)
-                } else {
-                    startService(serviceIntent)
-                }
+                GuardHealth.start(this@MainActivity, fromVisibleActivity = true)
             }
         }
     }
 
     private fun toggleGuarding(enabled: Boolean) {
-        kotlinx.coroutines.MainScope().launch {
-            appConfig.setGuardingEnabled(enabled)
-        }
-
-        val serviceIntent = Intent(this, MonitorForegroundService::class.java)
-        if (enabled) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(serviceIntent)
-            } else {
-                startService(serviceIntent)
+        lifecycleScope.launch {
+            val current = appConfig.getConfig()
+            if (enabled && (current.senderEmail.isBlank() || current.senderPassword.isBlank() ||
+                        current.recipientEmail.isBlank() ||
+                        com.xzygis.silentguard.config.ConfigValidation.errors(current).isNotEmpty())) {
+                Toast.makeText(this@MainActivity, "请先保存完整有效的邮件配置", Toast.LENGTH_LONG).show()
+                return@launch
             }
-            Toast.makeText(this, "守护已启动", Toast.LENGTH_SHORT).show()
+            if (enabled && !AppDiagnostics.hasLocationPermission(this@MainActivity)) {
+                requestPermissions()
+                Toast.makeText(this@MainActivity, "授权后请再次开启守护", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            appConfig.setGuardingEnabled(enabled)
+        val serviceIntent = Intent(this@MainActivity, MonitorForegroundService::class.java)
+        if (enabled) {
+            if (!GuardHealth.start(this@MainActivity, fromVisibleActivity = true)) {
+                Toast.makeText(this@MainActivity, "服务启动受限，请检查权限后重试", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            MailWorker.recover(this@MainActivity)
+            Toast.makeText(this@MainActivity, "守护已启动", Toast.LENGTH_SHORT).show()
 
             // 首次启动守护时，在国产 ROM 上引导用户开启后台运行权限
-            if (BackgroundGuideHelper.shouldShowGuide(this)) {
-                BackgroundGuideHelper.showGuideDialog(this)
+            if (BackgroundGuideHelper.shouldShowGuide(this@MainActivity)) {
+                BackgroundGuideHelper.showGuideDialog(this@MainActivity)
             }
         } else {
             stopService(serviceIntent)
-            Toast.makeText(this, "守护已停止", Toast.LENGTH_SHORT).show()
+            EmailScheduleWorker.cancel(this@MainActivity)
+            Toast.makeText(this@MainActivity, "守护已停止，待发送任务已暂停", Toast.LENGTH_SHORT).show()
+        }
         }
     }
 

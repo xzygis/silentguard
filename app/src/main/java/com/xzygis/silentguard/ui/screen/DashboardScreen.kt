@@ -47,9 +47,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
 import com.xzygis.silentguard.config.MonitorConfig
 import com.xzygis.silentguard.data.EventStatus
 import com.xzygis.silentguard.data.EventType
@@ -58,11 +55,11 @@ import com.xzygis.silentguard.data.MonitorEvent
 import com.xzygis.silentguard.data.MonitorEventDao
 import com.xzygis.silentguard.diagnostics.AppDiagnostics
 import com.xzygis.silentguard.location.AmapCoordinateConverter
+import com.xzygis.silentguard.location.DeviceLocationProvider
 import com.xzygis.silentguard.mail.MailWorker
 import com.xzygis.silentguard.mail.StaticMapUrlBuilder
 import com.xzygis.silentguard.ui.theme.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -81,6 +78,14 @@ fun DashboardScreen(
     onNavigateToMap: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val health = androidx.compose.runtime.remember { com.xzygis.silentguard.diagnostics.GuardHealth(context) }
+    var alive by androidx.compose.runtime.remember { mutableStateOf(health.isAlive()) }
+    androidx.compose.runtime.LaunchedEffect(isGuarding) {
+        while (true) {
+            alive = health.isAlive()
+            kotlinx.coroutines.delay(15_000)
+        }
+    }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var isSendingSos by androidx.compose.runtime.remember { mutableStateOf(false) }
     val todayStart = getTodayStartMillis()
@@ -98,6 +103,10 @@ fun DashboardScreen(
             config.recipientEmail.isNotBlank()
     val smsReady = smsPermissionGranted || smsNotificationReadEnabled
     val healthItems = listOf(
+        HealthItem("服务心跳", !isGuarding || alive,
+            if (!isGuarding) "守护已关闭" else if (alive) "最近三分钟内有运行心跳"
+            else health.startError.ifBlank { "暂无心跳，请重新开启守护并检查后台权限" },
+            onClick = onNavigateToSettings),
         HealthItem(
             "短信记录", smsReady,
             if (smsPermissionGranted) "短信权限已开启" else if (smsNotificationReadEnabled) "短信通知读取已开启" else "开启短信权限，或允许读取短信通知",
@@ -646,18 +655,13 @@ private suspend fun enqueueSosMail(
     return try {
         if (!hasPermission) {
             body.appendLine("当前位置: 未授予定位权限")
-            MailWorker.enqueue(context.applicationContext, subject, body.toString())
+            MailWorker.enqueue(context.applicationContext, subject, body.toString(), automatic = false)
             return true
         }
 
-        val fusedClient = LocationServices.getFusedLocationProviderClient(context)
-        val location = withTimeoutOrNull(3_000L) {
-            fusedClient.getCurrentLocation(
-                Priority.PRIORITY_BALANCED_POWER_ACCURACY,
-                CancellationTokenSource().token
-            ).await()
-        } ?: withTimeoutOrNull(1_000L) {
-            fusedClient.lastLocation.await()
+        // 保留 SOS 快速提交的 4 秒预算，无 GMS 设备也能尝试系统定位。
+        val location = withTimeoutOrNull(4_000L) {
+            DeviceLocationProvider.getCurrentLocation(context)
         }
 
         var sosEvent: MonitorEvent? = null
@@ -743,16 +747,20 @@ private suspend fun enqueueSosMail(
                     googleLink = googleLink,
                     note = locationNote
                 ),
-                isHtml = true
+                isHtml = true,
+                automatic = false
             )
         } else {
-            MailWorker.enqueue(context.applicationContext, subject, body.toString())
+            MailWorker.enqueue(context.applicationContext, subject, body.toString(), automatic = false)
         }
         true
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
     } catch (e: Exception) {
         body.appendLine("当前位置: 获取失败（${e.message ?: "未知错误"}）")
-        MailWorker.enqueue(context.applicationContext, subject, body.toString())
-        true
+        runCatching {
+            MailWorker.enqueue(context.applicationContext, subject, body.toString(), automatic = false) != null
+        }.getOrDefault(false)
     }
 }
 

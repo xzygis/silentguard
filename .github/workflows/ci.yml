@@ -25,11 +25,22 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug testDebugUnitTest
 
       - name: Lint Check
         run: ./gradlew lintDebug
-        continue-on-error: true
+
+      - name: Verify Room schema is committed
+        run: |
+          git diff --exit-code -- app/schemas
+          test -z "$(git ls-files --others --exclude-standard app/schemas)"
+
+      - name: Upload Test Report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/
 
       - name: Upload Lint Report
         if: always()
